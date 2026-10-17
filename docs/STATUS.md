@@ -100,3 +100,5 @@ Final link checks: 26 backend tests passed; browser controlled-response test pas
 
 ## Pre-merge code review — 2026-10-18
 Reviewed AI/provider responses, source timing and approval, worker leases/cancellation, file commits and URL retry boundaries. Fixed voice catalog validation for malformed model/language metadata and stale pending voice-sample state on project switch. Added provider-metadata regression. Backend27 tests and frontend production build passed. Latest origin/main merged without conflict. Existing long import left running.
+
+Pre-merge browser regression passed in isolated temporary storage on ports3601/6061. A test-only Playwright header override supplied the standard allowed origin; production origin policy was unchanged. Upload/probe, subtitle edit/autosave/undo, exports, translation/voice fixtures, project management and URL import passed with no browser errors. GitHub connector PR creation unavailable (403 integration permissions); merge performed through authorized Git access.
