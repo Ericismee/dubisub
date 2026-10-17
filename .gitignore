@@ -1,0 +1,35 @@
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+cookies*.txt
+# Local media, databases, models and generated outputs
+/data/
+/storage/
+/uploads/
+/exports/
+/cache/
+/models/
+*.sqlite
+*.sqlite3
+*.db
+# Dependencies and build outputs
+node_modules/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+build/
+coverage/
+playwright-report/
+test-results/
+# Machine-specific files
+.DS_Store
+Thumbs.db
+*.log
+.claude/settings.local.json
