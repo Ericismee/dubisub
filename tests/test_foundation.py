@@ -160,3 +160,23 @@ def test_project_edit_delete_restore_preserves_source(client):
     with store.connect() as db:assert db.execute('SELECT state FROM jobs WHERE project_id=?',(pid,)).fetchone()[0]=='canceled'
     assert client.post('/api/projects/'+pid+'/restore').status_code==200
     assert client.get('/api/projects/'+pid).json()['assets'][0]['checksum']
+
+
+def test_project_library_pagination_search_and_deleted(client):
+    ids=[]
+    for index in range(105):
+        p=client.post('/api/projects',json={'name':f'Kho {index:03}'}).json();ids.append(p['id'])
+    special=client.post('/api/projects',json={'name':'ĐIỆN ẢNH 世界'}).json()
+    deleted=client.post('/api/projects',json={'name':'Deleted library fixture'}).json()
+    assert client.request('DELETE','/api/projects/'+deleted['id'],json={'revision':deleted['revision']}).status_code==200
+    found=[];offset=0
+    while True:
+        page=client.get('/api/project-library',params={'offset':offset}).json()
+        found.extend(p['id'] for p in page['items'])
+        assert all('tracks' not in p for p in page['items'])
+        if not page['has_more']:break
+        offset+=24
+    assert len(found)==106 and len(set(found))==106
+    assert set(ids).issubset(found) and deleted['id'] not in found
+    assert client.get('/api/project-library',params={'search':'điện ảnh'}).json()['items'][0]['id']==special['id']
+    assert client.get('/api/project-library?offset=-1').status_code==422

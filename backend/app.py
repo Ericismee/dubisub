@@ -8,7 +8,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 import langcodes
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Query
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
@@ -139,6 +139,19 @@ def settings():
             'providers': providers, 'ai_status': 'unverified' if providers else 'not_configured',
             'ffmpeg_available': bool(shutil.which(os.getenv('DUBISUB_FFMPEG', 'ffmpeg'))),
             'ffprobe_available': bool(shutil.which(os.getenv('DUBISUB_FFPROBE', 'ffprobe')))}
+
+
+@app.get('/api/project-library')
+def project_library(offset:int=Query(0,ge=0),search:str=Query('',max_length=160)):
+    with store.connect() as db:
+        db.create_function('casefold',1,lambda value:str(value or '').casefold())
+        rows=db.execute("""SELECT id,json_extract(document,'$.name') AS name,
+            json_extract(document,'$.mode') AS mode,json_extract(document,'$.target_language') AS target_language,
+            COALESCE(json_array_length(document,'$.tracks'),0) AS track_count
+            FROM projects WHERE COALESCE(json_extract(document,'$.deleted'),0)=0
+            AND instr(casefold(json_extract(document,'$.name')),casefold(?))>0
+            ORDER BY rowid DESC LIMIT 25 OFFSET ?""",(search.strip(),offset)).fetchall()
+    return {'items':[dict(r) for r in rows[:24]],'has_more':len(rows)>24}
 
 
 @app.get('/api/projects')

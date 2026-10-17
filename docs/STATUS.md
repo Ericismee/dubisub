@@ -102,3 +102,11 @@ Final link checks: 26 backend tests passed; browser controlled-response test pas
 Reviewed AI/provider responses, source timing and approval, worker leases/cancellation, file commits and URL retry boundaries. Fixed voice catalog validation for malformed model/language metadata and stale pending voice-sample state on project switch. Added provider-metadata regression. Backend27 tests and frontend production build passed. Latest origin/main merged without conflict. Existing long import left running.
 
 Pre-merge browser regression passed in isolated temporary storage on ports3601/6061. A test-only Playwright header override supplied the standard allowed origin; production origin policy was unchanged. Upload/probe, subtitle edit/autosave/undo, exports, translation/voice fixtures, project management and URL import passed with no browser errors. GitHub connector PR creation unavailable (403 integration permissions); merge performed through authorized Git access.
+
+
+## Project header actions — 2026-10-18
+Moved edit beside the active project title and delete to the right header actions; removed row actions from the library. Actions disabled with no selected project or unsaved/busy state. Existing revision checks and delete confirmation retained. Production frontend build passed.
+
+Studio chrome follow-up: red delete treatment including disabled state, bounded zoom minus/plus controls (100–500%, 50% steps), compact aligned header and consolidated sidebar settings entry. Browser checks passed at1256/1543/800/390px for settings dialog, zoom values/bounds, delete color and horizontal overflow; screenshot inspected. Frontend build passed.
+
+Header theme/brand follow-up: direct persistent dark/light toggle with moon/sun and theme-specific color; sidebar remains the settings entry. Added white/purple dark logo and compact-viewBox wordmark variants derived from original assets (originals retained). Browser checks passed for toggle without dialog, reload persistence, logo color, mobile visibility/width; production build passed.

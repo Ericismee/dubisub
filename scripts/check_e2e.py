@@ -90,7 +90,7 @@ def main():
                 page.goto('http://127.0.0.1:3600')
                 page.wait_for_load_state('networkidle')
                 assert page.evaluate('document.documentElement.dataset.theme')=='dark'
-                page.get_by_role('button',name='Cấu hình studio',exact=True).click()
+                page.get_by_role('button',name='Cài đặt studio',exact=True).click()
                 settings=page.get_by_role('dialog',name='Cài đặt',exact=True)
                 expect(settings).to_be_visible()
                 settings.get_by_label('Sáng',exact=False).check()
@@ -245,7 +245,7 @@ def main():
                 page.locator('.project-open').filter(has_text='Bản dịch đã sửa').click()
                 expect(page.get_by_label('Câu 1',exact=True)).to_have_value('Chào DubiSub — tiếng Việt 世界')
                 page.screenshot(path='test-results/studio-dark-managed.png',full_page=True)
-                page.get_by_role('button',name='Cấu hình studio',exact=True).click()
+                page.get_by_role('button',name='Cài đặt studio',exact=True).click()
                 page.screenshot(path='test-results/studio-settings.png',full_page=True)
                 page.get_by_role('button',name='Đóng cài đặt',exact=True).click()
                 page.get_by_label('Link YouTube hoặc file trực tiếp',exact=True).fill(f'http://127.0.0.1:{fixture.server_port}/fixture.mp4')
