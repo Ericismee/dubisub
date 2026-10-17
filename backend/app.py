@@ -83,7 +83,7 @@ class EditTrack(BaseModel):
 def health():
     with store.connect() as db:
         db.execute('SELECT 1')
-    return {'status': 'ok', 'product': 'DubiSub', 'schema_version': 2}
+    return {'status': 'ok', 'product': 'DubiSub', 'schema_version': 3}
 
 
 class ProviderConfig(BaseModel):
@@ -147,10 +147,65 @@ def read(project_id: str):
     with store.connect() as db:
         document = store.project(db, project_id)
         document['assets'] = [dict(r) for r in db.execute(
-            'SELECT id,filename,kind,checksum,metadata FROM assets WHERE project_id=?', (project_id,))]
+            "SELECT id,filename,kind,checksum,metadata FROM assets WHERE project_id=? AND kind!='remote'", (project_id,))]
         document['jobs'] = [dict(r) for r in db.execute(
-            'SELECT id,kind,state,attempts,progress,error FROM jobs WHERE project_id=?', (project_id,))]
+            'SELECT id,asset_id,kind,state,attempts,progress,error FROM jobs WHERE project_id=?', (project_id,))]
+        document['links'] = [dict(r) for r in db.execute('SELECT link_imports.id,assets.filename FROM link_imports JOIN assets ON assets.id=link_imports.id WHERE assets.project_id=?',(project_id,))]
     return document
+
+
+class LinkRequest(BaseModel):
+    url: str = Field(min_length=8,max_length=8192)
+
+
+class LinkSelection(BaseModel):
+    mode: Literal['video','audio','subtitles'] = 'video'
+    format_id: str = Field(default='',max_length=100)
+    subtitle_ids: list[str] = Field(default_factory=list,max_length=5)
+
+
+@app.post('/api/projects/{project_id}/links',status_code=202)
+def inspect_link(project_id: str, body: LinkRequest):
+    from .safe_http import SafeHTTP, redact
+    from .link_sources import youtube_url
+    # DNS resolution and all remote I/O happen only in the worker.
+    parsed=urlsplit(body.url)
+    if parsed.scheme not in ('http','https') or not parsed.hostname or parsed.username or parsed.password:
+        raise HTTPException(422,'Chỉ nhận liên kết HTTP(S) không chứa thông tin đăng nhập.')
+    canonical=youtube_url(body.url)
+    aid,jid=store.uid(),store.uid()
+    with store.connect() as db:
+        store.project(db,project_id)
+        db.execute('INSERT INTO assets VALUES(?,?,?,?,?,?,NULL)',(aid,project_id,redact(body.url),'','remote',''))
+        db.execute('INSERT INTO link_imports VALUES(?,?,NULL)',(aid,canonical or body.url))
+        db.execute("INSERT INTO jobs(id,project_id,asset_id,kind) VALUES(?,?,?,'inspect_link')",(jid,project_id,aid))
+    return {'link_id':aid,'job_id':jid}
+
+
+@app.get('/api/links/{link_id}')
+def link_info(link_id: str):
+    from .link_sources import public_info
+    with store.connect() as db:
+        row=db.execute('SELECT * FROM link_imports WHERE id=?',(link_id,)).fetchone()
+        if not row:raise KeyError(link_id)
+        jobs=[dict(r) for r in db.execute('SELECT id,kind,state,progress,error,attempts FROM jobs WHERE asset_id=? ORDER BY rowid DESC',(link_id,))]
+    return {'id':link_id,'info':public_info(json.loads(row['inspection'])) if row['inspection'] else None,'jobs':jobs}
+
+
+@app.post('/api/links/{link_id}/download',status_code=202)
+def import_link(link_id: str, body: LinkSelection):
+    from .link_tasks import download_plan
+    jid=store.uid()
+    with store.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        row=db.execute('SELECT link_imports.*,assets.project_id FROM link_imports JOIN assets ON assets.id=link_imports.id WHERE link_imports.id=?',(link_id,)).fetchone()
+        if not row:raise KeyError(link_id)
+        if not row['inspection']:raise HTTPException(409,'Chờ phân tích nguồn hoàn tất.')
+        download_plan(json.loads(row['inspection']),body.model_dump())
+        if db.execute("SELECT id FROM jobs WHERE asset_id=? AND kind='download_link' AND state IN ('queued','running','succeeded')",(link_id,)).fetchone():
+            raise HTTPException(409,'Nguồn này đã nhập hoặc đang nhập. Phân tích lại link để nhập lựa chọn khác.')
+        db.execute("INSERT INTO jobs(id,project_id,asset_id,kind,payload) VALUES(?,?,?,'download_link',?)",(jid,row['project_id'],link_id,json.dumps(body.model_dump())))
+    return {'job_id':jid}
 
 
 @app.post('/api/projects/{project_id}/upload', status_code=202)

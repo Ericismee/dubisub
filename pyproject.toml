@@ -2,7 +2,14 @@
 name = "dubisub"
 version = "0.1.0"
 requires-python = ">=3.11,<3.14"
-dependencies = ["fastapi==0.128.8", "uvicorn==0.52.1", "python-multipart==0.0.32", "pysubs2==1.8.0", "langcodes==3.5.0"]
+dependencies = [
+    "fastapi==0.128.8",
+    "uvicorn==0.52.1",
+    "python-multipart==0.0.32",
+    "pysubs2==1.8.0",
+    "langcodes==3.5.0",
+    "yt-dlp==2026.8.19",
+]
 
 [dependency-groups]
 dev = ["pytest==8.4.2", "httpx==0.28.1", "playwright==1.56.0"]

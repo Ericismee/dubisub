@@ -31,7 +31,7 @@ npm ci --prefix frontend
 powershell -ExecutionPolicy Bypass -File scripts/start.ps1
 ```
 
-Mở **http://127.0.0.1:3600**; API ở `127.0.0.1:6060`. Giữ terminal mở; Ctrl+C để dừng. Script từ chối cổng đã có dịch vụ, không tắt tiến trình khác.
+Mở **http://127.0.0.1:3600**; API ở `127.0.0.1:6060`. Giữ terminal mở; Ctrl+C để dừng, hoặc chạy `powershell -ExecutionPolicy Bypass -File scripts/stop.ps1` ở terminal khác. Script từ chối cổng đã có dịch vụ, không tắt tiến trình khác.
 
 Tạo dự án → nhập video và SRT/VTT/ASS → sửa chữ/thời gian → đợi “Đã tự lưu” → mở lại từ thư viện → xuất SRT/VTT. Bấm số câu để seek video; track chữ trong video được worker trích xuất. MP4 H.264 đã kiểm tra trên Edge; định dạng khác tùy codec trình duyệt. ASS chuyển thành chữ thuần, không giữ hiệu ứng.
 

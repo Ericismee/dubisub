@@ -23,7 +23,7 @@ def connect():
 def migrate():
     with connect() as db:
         version = db.execute('PRAGMA user_version').fetchone()[0]
-        if version > 2:
+        if version > 3:
             raise RuntimeError('Database schema is newer than this application')
         if version == 0:
             db.executescript('''
@@ -47,6 +47,13 @@ def migrate():
             PRAGMA user_version=2;
             COMMIT;
             ''')
+        if version < 3:
+            db.execute('BEGIN IMMEDIATE')
+            if db.execute('PRAGMA user_version').fetchone()[0] < 3:
+                db.execute('CREATE TABLE link_imports(id TEXT PRIMARY KEY REFERENCES assets(id), url TEXT NOT NULL, inspection TEXT)')
+                db.execute('CREATE TABLE asset_origins(asset_id TEXT PRIMARY KEY REFERENCES assets(id), source_url TEXT NOT NULL, imported_at REAL NOT NULL, language TEXT NOT NULL, automatic INTEGER NOT NULL)')
+                db.execute("ALTER TABLE jobs ADD COLUMN payload TEXT NOT NULL DEFAULT '{}'")
+                db.execute('PRAGMA user_version=3')
 
 
 def project(db, project_id):

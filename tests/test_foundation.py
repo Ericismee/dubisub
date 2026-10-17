@@ -59,6 +59,19 @@ def test_invalid_upload_and_timing(client, monkeypatch):
     assert client.post('/api/projects', json={'name': 'a', 'target_language': 'Vietnamese'}).status_code == 422
 
 
+def test_timing_and_duplicate_id_validation(client):
+    pid = create(client)
+    client.post(f'/api/projects/{pid}/upload',data={'kind':'subtitle'},files={'file':('sample.srt',SRT.encode())})
+    p=client.get(f'/api/projects/{pid}').json()
+    track=p['tracks'][0]
+    url=f'/api/projects/{pid}/tracks/{track["id"]}'
+    track['cues'][0]['end_ms']=track['cues'][0]['start_ms']
+    assert client.put(url,json={'revision':p['revision'],'cues':track['cues']}).status_code == 422
+    track['cues'][0]['end_ms']=1200
+    track['cues'][1]['id']=track['cues'][0]['id']
+    assert client.put(url,json={'revision':p['revision'],'cues':track['cues']}).status_code == 422
+
+
 def test_ass_plaintext():
     ass = '[Script Info]\nScriptType: v4.00+\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:00.10,0:00:01.20,Default,,0,0,0,,{\\b1}Chào\\N世界\n'
     cues = parse(ass, 'ass')

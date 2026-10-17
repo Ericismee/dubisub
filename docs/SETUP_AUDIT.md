@@ -35,7 +35,7 @@ Cases reviewed: fresh project starts M1; missing provider does not block subtitl
 
 ## M1 verification result
 
-7 pytest tests passed with actual FFmpeg fixtures; TypeScript/build passed; Playwright real flow passed using installed Microsoft Edge in headless mode and a temporary profile. Browser-bundled Chromium did not decode the H.264 fixture on this machine; Edge did. No personal browser profile/cookies were read. Playwright browser binaries were downloaded into its standard cache while diagnosing this.
+8 pytest tests passed with actual FFmpeg fixtures; TypeScript/build passed; Playwright real flow passed using installed Microsoft Edge in headless mode and a temporary profile. Browser-bundled Chromium did not decode the H.264 fixture on this machine; Edge did. No personal browser profile/cookies were read. Playwright browser binaries were downloaded into its standard cache while diagnosing this.
 
 Data for E2E is isolated in a temporary directory; test server processes are stopped afterward. Ports 3600 and 6060 were checked before launch. Screenshot artifacts are ignored under test-results. See STATUS.md for exact coverage and unverified areas.
 

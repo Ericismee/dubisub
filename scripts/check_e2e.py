@@ -57,6 +57,13 @@ def main():
                 page.goto('http://127.0.0.1:3600')
                 page.wait_for_load_state('networkidle')
                 expect(page.get_by_role('heading',name='Tạo dự án',exact=True)).to_be_visible()
+                # All core studio surfaces exist before selecting or creating a project.
+                expect(page.get_by_role('navigation',name='Công cụ studio')).to_be_visible()
+                expect(page.get_by_role('heading',name='Phụ đề nguồn',exact=True)).to_be_visible()
+                expect(page.get_by_role('region',name='Timeline nguồn')).to_be_visible()
+                assert page.locator('.studio-banner').evaluate('(i)=>i.complete && i.naturalWidth > 0')
+                assert page.locator('.brand-wordmark').evaluate('(i)=>i.complete && i.naturalWidth > 0')
+                assert 'svg+xml' in page.locator('body').evaluate('(e)=>getComputedStyle(e).cursor')
                 page.get_by_label('Tên dự án').fill('Bản dịch thử nghiệm')
                 page.get_by_label('Chế độ',exact=True).select_option('review')
                 page.get_by_role('button',name='Tạo dự án',exact=True).click()
@@ -84,6 +91,20 @@ def main():
                 expect(page.get_by_label('Câu 1',exact=True)).to_have_value('Chào DubiSub — tiếng Việt 世界')
                 expect(page.get_by_label('Câu 2',exact=True)).to_have_value('مرحبا 世界')
                 page.wait_for_function('document.querySelector("video")?.textTracks[0]?.cues?.length === 2')
+                page.get_by_role('slider',name='Thu phóng timeline',exact=True).fill('2')
+                assert page.locator('.timeline-content').evaluate('(e)=>e.style.width') == '200%'
+                page.get_by_role('slider',name='Vị trí phát',exact=True).fill('2')
+                assert abs(page.locator('video').evaluate('(v)=>v.currentTime')-2)<.05
+                page.get_by_role('button',name='Phát video',exact=True).click()
+                expect(page.get_by_role('button',name='Tạm dừng',exact=True)).to_be_visible()
+                page.get_by_role('button',name='Tạm dừng',exact=True).click()
+                page.get_by_label('Tỷ lệ preview').select_option('9/16')
+                assert page.locator('.preview-frame').evaluate('(e)=>e.style.aspectRatio') == '9 / 16'
+                page.get_by_label('Tỷ lệ preview').select_option('16/9')
+                page.get_by_role('navigation',name='Công cụ studio').get_by_role('button',name='Dịch thuật',exact=True).click()
+                expect(page.get_by_role('heading',name='Dịch đa ngôn ngữ',exact=True)).to_be_visible()
+                expect(page.get_by_role('heading',name='Phụ đề nguồn',exact=True)).to_be_visible()
+                page.get_by_role('navigation',name='Công cụ studio').get_by_role('button',name='Phụ đề',exact=True).click()
                 for fmt in ('SRT','VTT'):
                     with page.expect_download() as download:
                         page.get_by_role('link',name='Xuất '+fmt,exact=True).click()

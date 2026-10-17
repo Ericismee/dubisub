@@ -11,7 +11,10 @@ Build DubiSub: independent multilingual video/subtitle translation and video edi
 ## Current state and evidence
 M1 local foundation runs: create/reopen, upload/probe, embedded text-sub extraction, subtitle edit/autosave/session undo-redo, native preview/seek and actual SRT/VTT downloads. Provider settings persist configuration only, capabilities unverified; no AI/key prerequisites for M1.
 
-7 pytest tests passed with real FFmpeg fixtures; frontend type/build and npm audit (0 vulnerabilities) passed; Playwright/Edge real UI flow passed, including Unicode/RTL and reopen/export. Details and limitations: `docs/STATUS.md`; environment: `docs/SETUP_AUDIT.md`.
+8 pytest tests passed with real FFmpeg fixtures; frontend type/build and npm audit (0 vulnerabilities) passed; Playwright/Edge real UI flow passed, including Unicode/RTL and reopen/export. Details and limitations: `docs/STATUS.md`; environment: `docs/SETUP_AUDIT.md`.
+
+## Latest UI request
+Studio redesign completed with persistent media/preview/subtitle/export/timeline panels, white/black/violet styling inspired by the supplied ELG Labs page and editor screenshots. Use original assets in `assets` directly; never redraw/overwrite them. Native SVG cursors applied, text caret retained. New `frontend/src/StudioParts.tsx` contains icons, real source timeline and clear unavailable-feature panels. Extended E2E passed. Preview aspect changes do not render video; AI/editing/render milestones remain unfinished.
 
 ## Next step
 M2 URL import under controlled local HTTP tests; enforce network policy through redirects/extractors before enabling untrusted URLs. M3 provider capability verification/ASR/translation; M4 timeline; M5 voices/review/dubbing. No live AI capability is currently claimed. Full crash/long-media/disk-exhaustion and full accessibility QA remain unverified.

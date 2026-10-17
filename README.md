@@ -75,7 +75,7 @@ npm ci --prefix frontend
 powershell -ExecutionPolicy Bypass -File scripts/start.ps1
 ```
 
-Open **http://127.0.0.1:3600**. The API runs at `127.0.0.1:6060` (`/health`, `/docs`). The launcher refuses occupied ports and does not stop existing services. Keep its terminal open; stop with Ctrl+C. This is a local development build, independent of NotebookE.
+Open **http://127.0.0.1:3600**. The API runs at `127.0.0.1:6060` (`/health`, `/docs`). The launcher refuses occupied ports and does not stop existing services. Keep its terminal open; stop with Ctrl+C, or run `powershell -ExecutionPolicy Bypass -File scripts/stop.ps1` from another terminal. This is a local development build, independent of NotebookE.
 
 Create a project, import a video and SRT/VTT/ASS, edit text/timing, wait for “Đã tự lưu”, reopen from the library, then export SRT/VTT. Click a cue number to seek. Embedded text subtitles are extracted by the separate durable worker. ASS styling is flattened; browser playback depends on container/codec support (MP4 H.264 verified on Windows Edge). Image subtitles are not transcribed.
 

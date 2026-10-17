@@ -13,15 +13,17 @@ Updated 2026-10-17. Root verified: `D:/WorkSpace/dubisub`. Target repository: `e
 - Download real SRT/VTT without AI or video render. ASS imports flatten styling and effects to plain text.
 - Durable job claim, heartbeat/lease recovery, process timeout, output bounds, cancel and bounded manual retry (3 attempts). Probe/extraction commits metadata, tracks and completion in one transaction to prevent duplicate tracks on retry. Progress is coarse (10/100), not continuous media progress.
 - Provider configuration persists endpoint/model/key environment-variable name only. Keys are not stored or returned. Capabilities stay empty/unverified; no AI request occurs in M1.
-- Local start script, sample generator, pinned Python/frontend lockfiles and bilingual run instructions.
+- Local start/stop scripts, sample generator, pinned Python/frontend lockfiles and bilingual run instructions.
 
 ## Verification evidence
 
-- `.venv/Scripts/python -m pytest -q`: **7 passed**, one upstream Starlette/AnyIO deprecation warning. Tests include actual FFmpeg MKV creation/extraction, Windows paths with spaces/diacritics, UTF-8/BOM/RTL/ASS, stable IDs, SRT/VTT round-trip, HTTP range response, revision conflict, malformed/oversize upload, missing media tool, queued/running cancellation, simulated expired worker lease, retry bounds, origin checks and provider metadata secrecy.
+- `.venv/Scripts/python -m pytest -q`: **8 passed**, one upstream Starlette/AnyIO deprecation warning. Tests include actual FFmpeg MKV creation/extraction, Windows paths with spaces/diacritics, UTF-8/BOM/RTL/ASS, stable IDs, SRT/VTT round-trip, HTTP range response, revision conflict, malformed/oversize upload, missing media tool, queued/running cancellation, simulated expired worker lease, retry bounds, origin checks and provider metadata secrecy.
 - `npm --prefix frontend run build`: TypeScript and Vite production build passed.
 - `npm audit --prefix frontend`: **0 vulnerabilities** after pinning Vite 7.3.7.
 - `.venv/Scripts/python scripts/check_e2e.py`: **passed** using headless installed Edge, a real short FFmpeg MP4, separate API/worker/Vite processes and temporary SQLite storage. Covers create review-mode project, upload/probe, playback metadata/seek, edit multilingual cues, autosave, undo/redo, reload/reopen, download SRT/VTT, native subtitle-track loading, keyboard focus, 390px layout and no browser page errors.
 - Screenshots: ignored `test-results/studio-desktop.png` and `test-results/studio-mobile.png`. Desktop inspected visually.
+
+- Launcher smoke test: API `/health` returned schema 2 / ok; UI returned HTTP 200. A second launcher correctly refused occupied port 3600 without stopping the running application. The stop script terminated only the recorded launcher tree, validating its PID/start time/workspace.
 
 ## Partial and unverified areas
 
@@ -38,3 +40,13 @@ Run `uv sync --locked`, `npm ci --prefix frontend`, then `powershell -ExecutionP
 Next: M2 controlled URL import, with local HTTP fixtures, redirect/DNS/size policies and enforceable extractor networking before enabling yt-dlp. M3 adds verified provider capabilities and ASR/translation. Do not infer AI output from synthetic sample media.
 
 The existing MIT license and concurrent branding/Git setup were preserved. This implementation turn did not initialize Git, change remotes, commit, upload or publish anything, and did not access NotebookE.
+
+
+## Studio UI refresh — 2026-10-17
+
+- Replaced the conditional M1 form layout with a persistent studio: tool rail, project/media library, central preview, subtitle inspector, export panel and source timeline. All core surfaces are present before a project is selected; importing into an empty studio creates a project automatically.
+- Uses the original `assets/wordmark.svg`, `assets/logo.svg` and `assets/banner.svg` directly through Vite imports. Original assets were not edited. White/black/violet styling follows the supplied ELG Labs reference and the project brand; layout draws from the user's video-editor screenshots.
+- Added native SVG arrow cursors on fine pointers, violet filled pointer on interactive controls, normal text caret in editing fields and system fallback. No pointer follower, animation loop or per-frame React updates.
+- Source timeline visualizes actual loaded media/cue timing. Working controls: play/pause, seek, cue seek, timeline zoom, media selection, fullscreen and preview aspect ratio. Aspect changes affect preview only; this is not a video renderer or multitrack edit engine.
+- Media drop on the central preview imports real files. Subtitle edit/autosave/undo/redo/export and conflict fallback remain connected to the existing API. AI/review/effects/voice panels clearly show unavailable functionality; no generated content or capabilities were invented.
+- Verification: TypeScript/Vite build passed; backend regression **8 passed**; extended Playwright/Edge flow passed with permanent empty-state panels, original brand images, SVG cursor CSS, actual upload/edit/save/reopen/export, timeline play/pause/seek/zoom, preview aspect changes, tool navigation retaining the subtitle editor, native VTT captions and 390px layout. No browser page errors. Desktop/mobile screenshots inspected visually.
