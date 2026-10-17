@@ -9,7 +9,7 @@ Development skill snapshots are included under `.agents/skills` and mirrored und
 
 See SKILLS.md for source URLs and skills-lock.json for file hashes and pinned commits where recorded. Preserve included notices. Inclusion here does not replace or relicense upstream terms. Before public redistribution, verify the license covering each snapshot and add any required repository-level license/notice files not included in downloaded subdirectories.
 
-FFmpeg, yt-dlp, ASR/TTS models, voice assets, fonts, and other runtime dependencies are planned integrations, not bundled application dependencies yet. Record their exact versions, licenses and distribution requirements when added.
+M1 invokes the separately installed FFmpeg/FFprobe (N-126277-ga8c7afa7d7-20260826 on the checked machine); these binaries are not bundled. Python dependencies are pinned in pyproject.toml/uv.lock; frontend dependencies are pinned in frontend/package.json and package-lock.json. Preserve their upstream license notices on redistribution. yt-dlp, ASR/TTS models and voice assets remain planned integrations. No font files or model weights are bundled. FFmpeg distribution requires review of the actual build configuration (the checked machine uses a GPL-enabled build).
 
 ## DubiSub branding and project license
 

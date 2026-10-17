@@ -130,7 +130,8 @@ def settings():
 @app.get('/api/projects')
 def projects():
     with store.connect() as db:
-        return [json.loads(r[0]) for r in db.execute('SELECT document FROM projects ORDER BY rowid DESC')]
+        rows = db.execute('SELECT document FROM projects ORDER BY rowid DESC LIMIT 100').fetchall()
+    return [{k:v for k,v in json.loads(r[0]).items() if k != 'tracks'} for r in rows]
 
 
 @app.post('/api/projects', status_code=201)

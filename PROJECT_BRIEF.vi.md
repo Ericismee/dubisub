@@ -1,6 +1,6 @@
 # DubiSub — Bản định hướng dự án độc lập
 
-Ngày soạn: 17/10/2026. Trạng thái: đặc tả để bắt đầu chat và dự án mới; chưa triển khai ứng dụng.
+Ngày soạn: 17/10/2026. Trạng thái: đặc tả mục tiêu sản phẩm; M1 đã bắt đầu triển khai, xem docs/STATUS.md để biết bằng chứng thực tế.
 
 ## 1. Mục tiêu và quyết định đã chốt
 
@@ -17,7 +17,7 @@ Thư mục dự án: `D:/WorkSpace/dubisub`.
 
 Đây là hệ thống riêng: mã nguồn, cấu hình, database, hàng đợi, dữ liệu và cổng chạy riêng. NotebookE chỉ là bối cảnh tham khảo; không sửa mã hoặc ghi dữ liệu vào NotebookE. Các dịch vụ AI có thể được dùng qua endpoint do người dùng cấu hình.
 
-Tên sản phẩm đã chọn: **DubiSub**. Repo đề xuất: `ericismee/dubisub`. Film Review Studio là tên làm việc cũ; giữ nguyên thư mục D:/WorkSpace/dubisub.
+Tên sản phẩm đã chọn: **DubiSub**. Repo đề xuất: `ericismee/dubisub`. Film Review Studio/VioraCut là tên làm việc cũ. Thư mục đang mở đã xác minh: D:/WorkSpace/dubisub.
 
 ## 2. Trải nghiệm sử dụng
 

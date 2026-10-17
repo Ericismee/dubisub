@@ -15,7 +15,7 @@ AGENTS.md holds project-authored engineering rules. CLAUDE.md imports it using C
 
 Installation uses the official local Codex skill-installer helper with project-local --dest. File hashes in skills-lock.json identify the installed snapshot; upstream main is not a pinned commit. Review changes and regenerate hashes on future updates. Do not install arbitrary packs or execute their hooks automatically. No Claude model/runtime was installed or invoked.
 
-No application exists yet. Skills improve the development workflow; completion is measured by working features and tests in the project brief.
+Application implementation is tracked in docs/STATUS.md. Skills improve the development workflow; completion is measured by working features and tests in the project brief.
 
 
 ## Clarification and prompt skills added 17/10/2026
