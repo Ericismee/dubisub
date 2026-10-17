@@ -3,6 +3,7 @@ type Voice={id:string;name:string;gender:string;languages:string[];description:s
 export function VoicePanel({projectId,samples,jobs,locked,onRefresh,onConfigure}:{projectId?:string;samples:Record<string,{voice_id:string;language:string;text:string}>;jobs:{id:string;state:string;error:string|null}[];locked:boolean;onRefresh:()=>Promise<void>;onConfigure:()=>void}){
  const [voices,setVoices]=useState<Voice[]>([]),[voice,setVoice]=useState(''),[language,setLanguage]=useState('vi'),[gender,setGender]=useState('all'),[busy,setBusy]=useState(false),[error,setError]=useState(''),[pending,setPending]=useState(false),[pendingId,setPendingId]=useState(''),[sampleText,setSampleText]=useState('');
  const audio=useRef<HTMLAudioElement>(null);const refresh=useRef(onRefresh);refresh.current=onRefresh;
+ useEffect(()=>{audio.current?.pause();setPending(false);setPendingId('');setError('');},[projectId]);
  const languages=Array.from(new Set(voices.flatMap(v=>v.languages)));
  const filtered=voices.filter(v=>v.languages.includes(language)&&(gender==='all'||v.gender===gender));
  const standardText=sampleText||(language.split('-')[0]==='en'?'Hello! This is a voice preview in DubiSub.':language.split('-')[0]==='vi'?'Xin chào! Đây là giọng đọc thử trong DubiSub.':'');

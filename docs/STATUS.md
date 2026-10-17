@@ -96,3 +96,7 @@ Final verification: 25 backend tests passed (including native Ollama tags/chat f
 - Live independent YouTube smoke jNQXAC9IVRw: inspect, actual format160 download, audio merge and probe succeeded in temporary storage. Controlled URL regressions6 passed, including bounded signed-URL refresh and Unicode subtitle preservation. Frontend build passed. This does not guarantee every YouTube source or the current long import/subtitle selections will succeed.
 
 Final link checks: 26 backend tests passed; browser controlled-response test passed for byte/speed/size display and hiding stale errors; no page errors.
+
+
+## Pre-merge code review — 2026-10-18
+Reviewed AI/provider responses, source timing and approval, worker leases/cancellation, file commits and URL retry boundaries. Fixed voice catalog validation for malformed model/language metadata and stale pending voice-sample state on project switch. Added provider-metadata regression. Backend27 tests and frontend production build passed. Latest origin/main merged without conflict. Existing long import left running.

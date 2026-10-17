@@ -22,11 +22,15 @@ def catalog(provider):
     rows=response.get('data',response.get('voices')) if isinstance(response,dict) else response
     if not isinstance(rows,list) or len(rows)>1000:raise ProviderError('Provider không trả danh sách giọng hợp lệ.')
     models=request(provider,'models',timeout=10)
+    if not isinstance(models,dict) or not isinstance(models.get('data'),list):
+        raise ProviderError('Provider không trả danh sách model hợp lệ.')
     vieneu=any(isinstance(m,dict) and m.get('id')=='vieneu-v3-turbo' for m in models.get('data',[]))
     result=[]
     for item in rows:
         if not isinstance(item,dict) or not isinstance(item.get('id'),str) or not 0<len(item['id'])<=160:continue
         languages=item.get('languages') or ([item['language']] if item.get('language') else ['vi'] if vieneu else [])
+        if isinstance(languages,str):languages=[languages]
+        if not isinstance(languages,list):raise ProviderError('Metadata ngôn ngữ giọng không hợp lệ.')
         languages=[langcodes.standardize_tag(t) for t in languages if isinstance(t,str) and langcodes.tag_is_valid(t) and t!='und'][:20]
         result.append({'id':item['id'],'name':str(item.get('name') or item['id'])[:160],'gender':item.get('gender') if item.get('gender') in ('male','female') else 'unknown','languages':languages,'description':str(item.get('description',''))[:400]})
     return result

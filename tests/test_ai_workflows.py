@@ -167,3 +167,14 @@ def test_ollama_native_translation_and_catalog(provider):
     result=client.get('/api/projects/'+p['id']).json()
     assert result['tracks'][-1]['cues'][0]['text'].startswith('fixture-vi:')
     assert client.put('/api/settings',json={'providers':[{'kind':'tts','endpoint':config['endpoint'],'protocol':'ollama'}]}).status_code==422
+
+
+def test_voice_catalog_rejects_malformed_provider_metadata(monkeypatch):
+    from backend import voices
+    from backend.providers import ProviderError
+    monkeypatch.setattr(voices,'request',lambda config,path,**kw: {'data':[{'id':'v','languages':42}]} if path=='voices' else {'data':[]})
+    with pytest.raises(ProviderError,match='Metadata'):voices.catalog({})
+    monkeypatch.setattr(voices,'request',lambda config,path,**kw: {'data':[{'id':'v','languages':['vi']}]} if path=='voices' else [])
+    with pytest.raises(ProviderError,match='model'):voices.catalog({})
+    monkeypatch.setattr(voices,'request',lambda config,path,**kw: {'data':[{'id':'v','languages':'vi'}]} if path=='voices' else {'data':[]})
+    assert voices.catalog({})[0]['languages']==['vi']
