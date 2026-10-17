@@ -46,7 +46,7 @@ This is the product roadmap. M1 implements the local subtitle foundation; see [S
 - [x] Shared Codex / Claude / Cursor project guidance
 - [x] Project-scoped development skills and hash audit
 - [x] **M1 — Local foundation baseline:** project library, upload/probe, subtitle editor, real subtitle export
-- [ ] **M2 — Link import:** supported URLs, quality/track selection, bounded download jobs
+- [ ] **M2 — Link import (baseline verified):** YouTube/direct files, format/subtitle selection and bounded jobs; authentication, playlists, manifests and broader QA remain pending
 - [ ] **M3 — Translation:** ASR fallback, glossary, multiple target languages, automation presets
 - [ ] **M4 — Editing core:** multitrack timeline, trim/split/ripple, preview and render
 - [ ] **M5 — Voice & review:** voice samples, speaker mapping, dubbing alignment, review export
@@ -116,3 +116,10 @@ DubiSub original project code, documentation, and original SVG brand assets are 
 ---
 
 <div align="center">If this direction would help your workflow, a ⭐ helps others discover DubiSub.</div>
+
+
+### Latest local features
+
+Default dark studio, persistent light/dark and cursor choices, grouped settings (Appearance/ASR/Translation/TTS/Storage), project metadata edit and recoverable deletion are available. Delete cancels work and hides the project; it preserves original files. Use Restore to undo.
+
+Paste a YouTube or direct media/subtitle URL in the media library, analyze it, select content and import. DubiSub downloads into its own local store; no manual download/upload is needed. A public short YouTube sample completed inspect/download/merge/probe. Some videos require unsupported verification; playlists/live/DRM/authenticated sources, generic web pages, manifest streams and JS challenges remain unsupported. Direct-file servers must accept HEAD. See STATUS for exact test coverage and limitations. AI settings still store configuration only.
