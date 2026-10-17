@@ -66,6 +66,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "langcodes" },
     { name = "pysubs2" },
     { name = "python-multipart" },
@@ -83,6 +84,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = "==0.128.8" },
+    { name = "httpx", specifier = "==0.28.1" },
     { name = "langcodes", specifier = "==3.5.0" },
     { name = "pysubs2", specifier = "==1.8.0" },
     { name = "python-multipart", specifier = "==0.0.32" },

@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import threading
+import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import urlopen
@@ -33,10 +34,28 @@ def main():
         sub = work/'phụ đề.srt'
         sub.write_text('1\n00:00:00,100 --> 00:00:01,200\nXin chào Việt Nam!\n\n2\n00:00:01,300 --> 00:00:02,900\nمرحبا 世界\n', encoding='utf-8-sig')
         subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','testsrc2=s=320x180:r=24:d=3','-c:v','libx264','-pix_fmt','yuv420p','-y',str(sample)],check=True)
+        stats={'speech_calls':0}
         class FixtureHandler(BaseHTTPRequestHandler):
             def log_message(self,*args):pass
             def do_HEAD(self):self.serve(False)
-            def do_GET(self):self.serve(True)
+            def do_GET(self):
+                if self.path=='/v1/voices':self.json_response({'data':[{'id':'fixture-vi','name':'Fixture Vietnamese','languages':['vi'],'gender':'female'},{'id':'fixture-en','name':'Fixture English','languages':['en'],'gender':'male'}]});return
+                if self.path=='/v1/models':self.json_response({'data':[{'id':'fixture-model'}]});return
+                self.serve(True)
+            def json_response(self,value):
+                data=json.dumps(value).encode();self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
+            def do_POST(self):
+                if self.path=='/v1/audio/speech':
+                    import wave,io
+                    self.rfile.read(int(self.headers['Content-Length']));stats['speech_calls']+=1
+                    stream=io.BytesIO()
+                    with wave.open(stream,'wb') as w:w.setnchannels(1);w.setsampwidth(2);w.setframerate(16000);w.writeframes(b'\x00\x00'*32000)
+                    content=stream.getvalue();self.send_response(200);self.send_header('Content-Type','audio/wav');self.send_header('Content-Length',str(len(content)));self.end_headers();self.wfile.write(content);return
+                if self.path!='/v1/chat/completions':self.send_error(404);return
+                body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                payload=json.loads(body['messages'][1]['content'])
+                answer={'cues':[{'id':c['id'],'text':'fixture-'+payload['target_language']+': '+c['text']} for c in payload['cues']]}
+                self.json_response({'choices':[{'message':{'content':json.dumps(answer)}}]})
             def serve(self,body):
                 if self.path not in ('/fixture.mp4','/fixture.srt'):
                     self.send_error(404);return
@@ -78,10 +97,15 @@ def main():
                 assert page.evaluate('document.documentElement.dataset.theme')=='light'
                 settings.get_by_label('Tối',exact=False).check()
                 settings.get_by_role('navigation',name='Nhóm cấu hình').get_by_role('button',name='Dịch thuật',exact=True).click()
-                settings.get_by_label('Endpoint API',exact=True).fill('http://127.0.0.1:9999/v1')
-                settings.get_by_label('Model',exact=True).fill('configuration-only')
+                settings.get_by_label('Endpoint API',exact=True).fill(f'http://127.0.0.1:{fixture.server_port}/v1')
+                settings.get_by_label('Model',exact=True).fill('fixture-model')
                 settings.get_by_role('button',name='Lưu cấu hình',exact=True).click()
-                page.wait_for_function("fetch('/api/settings').then(r=>r.json()).then(s=>s.providers.some(p=>p.kind==='translation'&&p.model==='configuration-only'))")
+                page.wait_for_function("fetch('/api/settings').then(r=>r.json()).then(s=>s.providers.some(p=>p.kind==='translation'&&p.model==='fixture-model'))")
+                settings.get_by_role('navigation',name='Nhóm cấu hình').get_by_role('button',name='Giọng đọc',exact=True).click()
+                settings.get_by_label('Endpoint API',exact=True).fill(f'http://127.0.0.1:{fixture.server_port}/v1')
+                settings.get_by_label('Model',exact=True).fill('fixture-model')
+                settings.get_by_role('button',name='Lưu cấu hình',exact=True).click()
+                page.wait_for_function("fetch('/api/settings').then(r=>r.json()).then(s=>s.providers.some(p=>p.kind==='tts'&&p.model==='fixture-model'))")
                 settings.get_by_role('navigation',name='Nhóm cấu hình').get_by_role('button',name='Lưu trữ & media',exact=True).click()
                 expect(settings.get_by_text('FFmpeg',exact=True)).to_be_visible()
                 settings.get_by_role('button',name='Đóng cài đặt',exact=True).click()
@@ -131,16 +155,69 @@ def main():
                 assert page.locator('.preview-frame').evaluate('(e)=>e.style.aspectRatio') == '9 / 16'
                 page.get_by_label('Tỷ lệ preview').select_option('16/9')
                 page.get_by_role('navigation',name='Công cụ studio').get_by_role('button',name='Dịch thuật',exact=True).click()
-                expect(page.get_by_role('heading',name='Dịch đa ngôn ngữ',exact=True)).to_be_visible()
+                expect(page.get_by_role('heading',name='ASR & dịch phụ đề',exact=True)).to_be_visible()
                 expect(page.get_by_role('heading',name='Phụ đề nguồn',exact=True)).to_be_visible()
                 page.get_by_role('navigation',name='Công cụ studio').get_by_role('button',name='Phụ đề',exact=True).click()
-                for fmt in ('SRT','VTT'):
+                for fmt in ('SRT','VTT','ASS'):
                     with page.expect_download() as download:
                         page.get_by_role('link',name='Xuất '+fmt,exact=True).click()
                     content=Path(download.value.path()).read_text(encoding='utf-8')
                     assert 'Chào DubiSub — tiếng Việt 世界' in content
                     assert 'مرحبا 世界' in content
-                    assert ('00:00:00,100' if fmt=='SRT' else '00:00:00.100') in content
+                    assert ('00:00:00,100' if fmt=='SRT' else '00:00:00.100' if fmt=='VTT' else '0:00:00.10') in content
+                page.locator('.subtitle-tools summary').click()
+                page.get_by_label('Tìm chữ phụ đề',exact=True).fill('Chào DubiSub')
+                page.get_by_label('Thay chữ phụ đề',exact=True).fill('Đổi thử')
+                page.get_by_role('button',name='Thay tất cả',exact=False).click()
+                expect(page.get_by_label('Câu 1',exact=True)).to_have_value('Đổi thử — tiếng Việt 世界')
+                expect(page.get_by_role('status')).to_have_text('Đã tự lưu',timeout=10000)
+                page.get_by_role('button',name='Hoàn tác',exact=True).click()
+                expect(page.get_by_role('status')).to_have_text('Đã tự lưu',timeout=10000)
+                page.get_by_role('button',name='Tách câu 1',exact=True).click()
+                expect(page.locator('.cues article')).to_have_count(3)
+                expect(page.get_by_role('status')).to_have_text('Đã tự lưu',timeout=10000)
+                page.get_by_role('button',name='Gộp câu 1 với câu sau',exact=True).click()
+                expect(page.locator('.cues article')).to_have_count(2)
+                expect(page.get_by_role('status')).to_have_text('Đã tự lưu',timeout=10000)
+                page.get_by_role('button',name='Hoàn tác',exact=True).click()
+                expect(page.get_by_role('status')).to_have_text('Đã tự lưu',timeout=10000)
+                page.get_by_role('button',name='Hoàn tác',exact=True).click()
+                expect(page.get_by_role('status')).to_have_text('Đã tự lưu',timeout=10000)
+                expect(page.get_by_label('Câu 1',exact=True)).to_have_value('Chào DubiSub — tiếng Việt 世界')
+                page.locator('.subtitle-tools summary').click()
+                page.get_by_label('Vùng xuất bắt đầu',exact=True).fill('1000')
+                page.get_by_label('Vùng xuất kết thúc',exact=True).fill('3000')
+                page.get_by_label('Tốc độ xuất',exact=True).select_option('2')
+                page.get_by_role('button',name='Xuất MP4',exact=True).click()
+                expect(page.locator('.artifact-list a')).to_have_count(1,timeout=20000)
+                with page.expect_download() as rendered:
+                    page.locator('.artifact-list a').click()
+                assert Path(rendered.value.path()).stat().st_size>100
+                page.get_by_label('Ngôn ngữ dịch đích',exact=True).fill('vi, en')
+                page.get_by_role('button',name='Dịch track đã chọn',exact=True).click()
+                expect(page.locator('.track-select option')).to_have_count(3,timeout=20000)
+                english=page.locator('.track-select option').filter(has_text='· en ·').get_attribute('value')
+                page.get_by_label('Track phụ đề',exact=True).select_option(english)
+                expect(page.get_by_label('Câu 1',exact=True)).to_have_value('fixture-en: Chào DubiSub — tiếng Việt 世界')
+                page.get_by_role('button',name='Đánh dấu đã duyệt',exact=True).click()
+                expect(page.get_by_role('button',name='Bỏ duyệt track',exact=True)).to_be_visible()
+                first=page.locator('.track-select option').first.get_attribute('value')
+                page.get_by_label('Track phụ đề',exact=True).select_option(first)
+                page.get_by_role('navigation',name='Công cụ studio').get_by_role('button',name='Giọng đọc',exact=True).click()
+                page.get_by_role('button',name='Lấy danh sách giọng từ provider',exact=True).click()
+                expect(page.get_by_label('Giọng provider',exact=True)).to_have_value('fixture-vi')
+                page.get_by_role('button',name='Tạo mẫu nghe chuẩn',exact=True).click()
+                expect(page.locator('.voice-panel audio')).to_have_count(1,timeout=15000)
+                old_audio=page.locator('.voice-panel audio').element_handle()
+                old_audio.evaluate('(a)=>a.play()')
+                page.get_by_label('Ngôn ngữ giọng',exact=True).select_option('en')
+                assert old_audio.evaluate('(a)=>a.paused')
+                expect(page.get_by_label('Giọng provider',exact=True)).to_have_value('fixture-en')
+                page.get_by_label('Ngôn ngữ giọng',exact=True).select_option('vi')
+                expect(page.locator('.voice-panel audio')).to_have_count(1)
+                page.locator('.voice-panel audio').evaluate('(a)=>a.play()')
+                assert stats['speech_calls']==1
+                page.get_by_role('navigation',name='Công cụ studio').get_by_role('button',name='Phụ đề',exact=True).click()
                 page.get_by_label('Câu 1',exact=True).focus()
                 page.keyboard.press('Tab')
                 assert page.evaluate('document.activeElement !== document.body')

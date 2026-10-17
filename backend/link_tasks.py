@@ -94,6 +94,16 @@ def execute(job_id, client=None):
         if info.get('duration') and info['duration']>43200:
             raise ValueError('Chỉ nhận media dài tối đa 12 giờ.')
         check()
+        thumbnail=info.pop('thumbnail_url',None)
+        if thumbnail:
+            # Optional, bounded and fetched through the same guarded transport.
+            try:
+                with client.open(thumbnail) as response:
+                    image=response.read(2*1024**2+1)
+                    if response.status==200 and len(image)<=2*1024**2 and (image.startswith(b'\xff\xd8\xff') or image.startswith(b'\x89PNG\r\n\x1a\n') or image.startswith(b'RIFF') and image[8:12]==b'WEBP'):
+                        check();directory=store.root()/'link-thumbnails';directory.mkdir(exist_ok=True)
+                        temporary=directory/(link['id']+'.part');temporary.write_bytes(image);temporary.replace(directory/link['id']);info['has_thumbnail']=True
+            except (ValueError,OSError):pass
         with store.connect() as db:
             db.execute('UPDATE link_imports SET inspection=? WHERE id=?',(json.dumps(info),link['id']))
         return {'inspected':True}

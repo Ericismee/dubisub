@@ -1,0 +1,169 @@
+"""Controlled protocol fixtures, NOT live AI quality verification."""
+import json
+import threading
+import subprocess
+from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+
+import pytest
+from fastapi.testclient import TestClient
+from backend.app import app
+from backend import store,worker
+from backend.subtitles import parse
+
+
+@pytest.fixture
+def provider(tmp_path,monkeypatch):
+    state={'requests':[],'fail_batch':False,'bad_ids':False}
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self,*a):pass
+        def respond(self,value,status=200):
+            content=json.dumps(value).encode();self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(content)));self.end_headers();self.wfile.write(content)
+        def do_GET(self):
+            if self.path=='/api/tags':self.respond({'models':[{'name':'fixture-model'}]});return
+            if self.path.endswith('/voices'):
+                self.respond({'data':[{'id':'fixture-vi','name':'Fixture VI','gender':'female','languages':['vi']},{'id':'fixture-en','name':'Fixture EN','gender':'male','languages':['en']}]});return
+            self.respond({'data':[{'id':'fixture-model'}]})
+        def do_POST(self):
+            raw=self.rfile.read(int(self.headers['Content-Length']))
+            if self.path.endswith('/speech'):
+                import io,wave
+                state['requests'].append({'tts':True,'voice':json.loads(raw)['voice']})
+                audio=io.BytesIO()
+                with wave.open(audio,'wb') as f:f.setnchannels(1);f.setsampwidth(2);f.setframerate(16000);f.writeframes(b'\x00\x00'*8000)
+                content=audio.getvalue();self.send_response(200);self.send_header('Content-Type','audio/wav');self.send_header('Content-Length',str(len(content)));self.end_headers();self.wfile.write(content);return
+            if self.path.endswith('/transcriptions'):
+                state['requests'].append({'asr':True,'has_wav':b'RIFF' in raw,'iso_language':b'\r\nvi\r\n' in raw})
+                self.respond({'segments':[{'start':.1,'end':.7,'text':'ASR fixture: Xin chÃ o'}]});return
+            body=json.loads(raw);data=json.loads(body['messages'][1]['content']);state['requests'].append(data)
+            if state['fail_batch'] and len(data['cues'])<20:
+                state['fail_batch']=False;self.respond({'error':'fixture'},500);return
+            cues=[{'id':c['id'],'text':f'fixture-{data["target_language"]}: '+c['text']} for c in data['cues']]
+            if state['bad_ids'] or state.get('bad_language')==data['target_language']:cues[0]['id']='wrong'
+            if self.path=='/api/chat':
+                assert body['stream'] is False and body['format']=='json'
+                self.respond({'message':{'content':json.dumps({'cues':cues})}});return
+            self.respond({'choices':[{'message':{'content':json.dumps({'cues':cues})}}]})
+    server=ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+    monkeypatch.setenv('DUBISUB_DATA_DIR',str(tmp_path/'db'))
+    try:
+        with TestClient(app) as client:
+            client.put('/api/settings',json={'providers':[{'kind':kind,'endpoint':f'http://127.0.0.1:{server.server_port}/v1','model':'fixture-model','key_env':''} for kind in ('asr','translation','tts')]})
+            yield client,state,tmp_path
+    finally:server.shutdown();server.server_close();thread.join()
+
+
+def source(client,count=2):
+    pid=client.post('/api/projects',json={'name':'AI fixture'}).json()['id']
+    text='\n\n'.join(f'{i+1}\n00:00:{i:02},100 --> 00:00:{i:02},900\nBonjour ä¸–ç•Œ {i}' for i in range(count))
+    client.post(f'/api/projects/{pid}/upload',data={'kind':'subtitle'},files={'file':('fixture.srt',text.encode())})
+    return client.get('/api/projects/'+pid).json()
+
+
+def test_multilingual_translation_original_intact_and_review(provider):
+    client,state,_=provider;p=source(client);pid=p['id'];track=p['tracks'][0]
+    checks=client.post('/api/providers/translation/check').json();assert checks['connected'] and not checks['inference_verified']
+    p=client.put(f'/api/projects/{pid}/glossary',json={'revision':p['revision'],'entries':{'Bonjour':'ChÃ o'}}).json()
+    response=client.post(f'/api/projects/{pid}/translate',json={'revision':p['revision'],'track_id':track['id'],'target_languages':['vi','EN-us']})
+    assert response.status_code==202,response.text
+    assert worker.run_once() and worker.run_once()
+    p=client.get('/api/projects/'+pid).json();assert len(p['tracks'])==3
+    assert p['tracks'][0]==track
+    for t in p['tracks'][1:]:
+        assert [c['id'] for c in t['cues']]==[c['id'] for c in track['cues']]
+        assert [c['start_ms'] for c in t['cues']]==[c['start_ms'] for c in track['cues']]
+        assert not t['reviewed']
+        for fmt in ('srt','vtt','ass'):
+            r=client.get(f'/api/projects/{pid}/tracks/{t["id"]}/export?format={fmt}');assert r.status_code==200
+            assert parse(r.text,fmt)[0]['text']==t['cues'][0]['text']
+    assert state['requests'][0]['glossary']=={'Bonjour':'ChÃ o'}
+    tid=p['tracks'][1]['id']
+    p=client.put(f'/api/projects/{pid}/tracks/{tid}/review',json={'revision':p['revision'],'reviewed':True}).json()
+    assert p['tracks'][1]['reviewed']
+    cues=p['tracks'][0]['cues'];cues[0]['text']='source changed'
+    client.put(f'/api/projects/{pid}/tracks/{track["id"]}',json={'revision':p['revision'],'cues':cues})
+    p=client.get('/api/projects/'+pid).json();assert p['tracks'][1]['source_changed']
+    assert client.put(f'/api/projects/{pid}/tracks/{tid}/review',json={'revision':p['revision'],'reviewed':True}).status_code==409
+
+
+def test_checkpoint_retry_and_strict_output(provider):
+    client,state,_=provider;p=source(client,25);pid=p['id'];state['fail_batch']=True
+    jid=client.post(f'/api/projects/{pid}/translate',json={'revision':p['revision'],'track_id':p['tracks'][0]['id'],'target_languages':['vi']}).json()['jobs'][0]['id']
+    worker.run_once();p=client.get('/api/projects/'+pid).json();assert p['jobs'][0]['state']=='failed'
+    assert len(p['tracks'])==1
+    with store.connect() as db:assert json.loads(db.execute('SELECT checkpoint FROM jobs WHERE id=?',(jid,)).fetchone()[0])['next_batch']==1
+    assert client.post('/api/jobs/'+jid+'/retry').status_code==200
+    worker.run_once();p=client.get('/api/projects/'+pid).json();assert p['jobs'][0]['state']=='succeeded'
+    assert len(state['requests'])==3 and len(p['tracks'])==2
+    state['bad_ids']=True
+    client.post(f'/api/projects/{pid}/translate',json={'revision':p['revision'],'track_id':p['tracks'][0]['id'],'target_languages':['ja']})
+    worker.run_once();p=client.get('/api/projects/'+pid).json();assert p['jobs'][-1]['state']=='failed' and len(p['tracks'])==2
+
+
+def test_asr_real_audio_iso_language_and_manual_track(provider):
+    client,state,directory=provider
+    audio=directory/'Ã¢m thanh thá»­.wav'
+    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','sine=frequency=440:duration=1','-y',str(audio)],check=True)
+    pid=client.post('/api/projects',json={'name':'ASR fixture'}).json()['id']
+    with audio.open('rb') as f:client.post(f'/api/projects/{pid}/upload',data={'kind':'media'},files={'file':(audio.name,f)})
+    worker.run_once();p=client.get('/api/projects/'+pid).json()
+    response=client.post(f'/api/projects/{pid}/transcribe',json={'asset_id':p['assets'][0]['id'],'source_language':'vi-VN'})
+    assert response.status_code==202,response.text
+    worker.run_once();p=client.get('/api/projects/'+pid).json()
+    assert p['jobs'][-1]['state']=='succeeded',p['jobs']
+    assert p['tracks'][0]['cues'][0]['start_ms']==100 and p['tracks'][0]['cues'][0]['end_ms']==700
+    assert state['requests'][0]['has_wav'] and state['requests'][0]['iso_language']
+    r=client.post(f'/api/projects/{pid}/tracks',json={'revision':p['revision'],'language':'ja'})
+    assert r.status_code==201
+    assert r.json()['project']['tracks'][-1]['cues']==[]
+
+
+def test_missing_provider_not_mocked(tmp_path,monkeypatch):
+    monkeypatch.setenv('DUBISUB_DATA_DIR',str(tmp_path))
+    with TestClient(app) as client:
+        p=source(client)
+        assert client.post(f'/api/projects/{p["id"]}/translate',json={'revision':p['revision'],'track_id':p['tracks'][0]['id'],'target_languages':['vi']}).status_code==409
+        assert not client.get('/api/projects/'+p['id']).json()['jobs']
+
+
+def test_one_target_failure_does_not_discard_other_target(provider):
+    client,state,_=provider;p=source(client);pid=p['id'];state['bad_language']='vi'
+    r=client.post(f'/api/projects/{pid}/translate',json={'revision':p['revision'],'track_id':p['tracks'][0]['id'],'target_languages':['vi','en']})
+    assert r.status_code==202
+    worker.run_once();worker.run_once()
+    p=client.get('/api/projects/'+pid).json()
+    assert [j['state'] for j in p['jobs']]==['failed','succeeded']
+    assert p['tracks'][-1]['language']=='en'
+
+
+def test_voice_discovery_sample_cache_and_language_guard(provider):
+    client,state,_=provider;p=source(client);pid=p['id']
+    voices=client.get('/api/voices').json()['voices']
+    assert voices[0]['languages']==['vi'] and voices[1]['languages']==['en']
+    assert client.post(f'/api/projects/{pid}/voice-samples',json={'voice_id':'fixture-vi','language':'en'}).status_code==422
+    response=client.post(f'/api/projects/{pid}/voice-samples',json={'voice_id':'fixture-vi','language':'vi'})
+    assert response.status_code==202,response.text
+    sample=response.json()['sample_id'];worker.run_once()
+    p=client.get('/api/projects/'+pid).json();assert p['jobs'][-1]['state']=='succeeded',p['jobs']
+    assert sample in p['voice_samples']
+    audio=client.get(f'/api/projects/{pid}/voice-samples/{sample}');assert audio.status_code==200 and audio.content.startswith(b'RIFF')
+    assert client.post(f'/api/projects/{pid}/voice-samples',json={'voice_id':'fixture-vi','language':'vi'}).json()['ready']
+    assert len([r for r in state['requests'] if r.get('tts')])==1
+
+
+def test_ollama_native_translation_and_catalog(provider):
+    client,state,_=provider
+    configs=client.get('/api/settings').json()['providers']
+    config=next(p for p in configs if p['kind']=='translation')
+    response=client.put('/api/settings',json={'providers':[{'kind':'translation','endpoint':config['endpoint'],'model':'fixture-model','protocol':'ollama'}]})
+    assert response.status_code==200
+    check=client.post('/api/providers/translation/check').json()
+    assert check['models']==['fixture-model'] and not check['inference_verified']
+    catalog=client.get('/api/provider-catalog').json()
+    assert len(catalog['models'])>18 and not catalog['installed_verified']
+    p=source(client)
+    r=client.post(f"/api/projects/{p['id']}/translate",json={'revision':p['revision'],'track_id':p['tracks'][0]['id'],'target_languages':['vi']})
+    assert r.status_code==202
+    assert worker.run_once()
+    result=client.get('/api/projects/'+p['id']).json()
+    assert result['tracks'][-1]['cues'][0]['text'].startswith('fixture-vi:')
+    assert client.put('/api/settings',json={'providers':[{'kind':'tts','endpoint':config['endpoint'],'protocol':'ollama'}]}).status_code==422

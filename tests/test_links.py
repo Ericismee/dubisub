@@ -19,10 +19,14 @@ def fixture_source(tmp_path):
     class Handler(SimpleHTTPRequestHandler):
         def log_message(self,*args):pass
         def do_HEAD(self):
+            if self.path=='/fallback.vtt':
+                self.send_response(405);self.end_headers();return
             if self.path=='/redirect':
                 self.send_response(302);self.send_header('Location','http://127.0.0.1/private');self.end_headers();return
             super().do_HEAD()
         def do_GET(self):
+            if self.path=='/fallback.vtt':
+                self.send_response(206);self.send_header('Content-Length','1');self.send_header('Content-Range','bytes 0-0/100');self.end_headers();self.wfile.write(b'W');return
             if self.path=='/resume.mp4':
                 payload=b'1234567890';start=int(self.headers.get('Range','bytes=0-').split('=')[1].split('-')[0])
                 self.send_response(206 if start else 200);self.send_header('ETag','"fixture"');self.send_header('Content-Length',str(len(payload)-start))
@@ -59,6 +63,8 @@ def test_redirect_size_and_extractor_policy(fixture_source):
         with pytest.raises(Exception):ydl.urlopen(Request('http://127.0.0.1/private'))
     assert youtube_url('https://youtu.be/BaW_jenozKc?t=3')=='https://www.youtube.com/watch?v=BaW_jenozKc'
     with pytest.raises(ValueError):youtube_url('https://www.youtube.com/watch?v=BaW_jenozKc&list=xxx')
+    info=inspect_source(url+'/fallback.vtt',SafeHTTP(test_origin=origin))
+    assert info['source']=='direct' and info['subtitles'][0]['id']=='direct'
     part=directory/'resume.part';part.write_bytes(b'123');part.with_suffix('.validator').write_text('"fixture"')
     assert link_tasks.stream_file(SafeHTTP(test_origin=origin),url+'/resume.mp4',part,10)==10
     assert part.read_bytes()==b'1234567890'

@@ -29,3 +29,7 @@ Finish M2 hardening/thumbnail UX and longer imports. Current YouTube support exc
 `backend/app.py`, `backend/store.py`, `backend/worker.py`, `backend/subtitles.py`, `frontend/src/main.tsx`, `scripts/start.ps1`, `scripts/check_e2e.py`, `tests/test_foundation.py`, `README.vi.md`.
 
 Run: `uv sync --locked`; `npm ci --prefix frontend`; `powershell -ExecutionPolicy Bypass -File scripts/start.ps1`; open `http://127.0.0.1:3600`.
+
+
+## Latest 2026-10-18
+Implemented backend/providers.py, ai_tasks.py, workflows.py, rendering.py, voices.py plus WorkflowPanel/SubtitleTools/RenderPanel/VoicePanel. Durable ASR/translation with glossary, strict output validation/checkpoints; subtitle tools; single-source MP4 exports; real cached TTS samples; persistent trash. Ollama + OpenAI-compatible translation, 24-family suggestions separated from discovered installed tags. User requests >18 models like NotebookE; implementation is independent, no NotebookE access. Ollama CLI installed but port11434 unavailable; no model downloads. Live TTS one Vietnamese sample verified; LLM/ASR currently fixture-verified only. Full review/dubbing/multitrack still pending. See latest docs/STATUS.md. User authorizes commit/push to appropriate branch with no codex/ prefix.
