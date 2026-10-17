@@ -1,6 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './style.css';
+import {SettingsDialog, type Theme} from './SettingsDialog';
+import {ProjectDialog} from './ProjectDialog';
+import {LinkImport} from './LinkImport';
 import logoUrl from '../../assets/logo.svg';
 import wordmarkUrl from '../../assets/wordmark.svg';
 import bannerUrl from '../../assets/banner.svg';
@@ -8,7 +11,7 @@ import {Icon, Timeline, ToolInfo, tools, type Tool} from './StudioParts';
 
 type Cue = {id:string;start_ms:number;end_ms:number;text:string};
 type Track = {id:string;language:string;cues:Cue[]};
-type Project = {id:string;name:string;mode:string;target_language:string;revision:number;tracks:Track[];assets?:{id:string;filename:string;kind:string;metadata:string|null}[];jobs?:{id:string;kind:string;state:string;progress:number;error:string|null}[]};
+type Project = {id:string;name:string;mode:string;target_language:string;revision:number;tracks:Track[];links?:{id:string;filename:string}[];assets?:{id:string;filename:string;kind:string;metadata:string|null}[];jobs?:{id:string;kind:string;state:string;progress:number;error:string|null}[]};
 async function api<T>(path:string, options?:RequestInit):Promise<T> {
   const response = await fetch(path, options);
   if (!response.ok) throw new Error(await response.text());
@@ -16,15 +19,12 @@ async function api<T>(path:string, options?:RequestInit):Promise<T> {
 }
 const json = (value:unknown) => ({headers:{'Content-Type':'application/json'},body:JSON.stringify(value)});
 
-type Provider={kind:string;endpoint:string;model:string;key_env:string};
-function ProviderSettings(){
-  const [providers,setProviders]=useState<Provider[]>([]),[message,setMessage]=useState('');
-  const [kind,setKind]=useState('translation'),[endpoint,setEndpoint]=useState(''),[model,setModel]=useState(''),[keyEnv,setKeyEnv]=useState('');
-  useEffect(()=>{api<{providers:Provider[]}>('/api/settings').then(s=>setProviders(s.providers)).catch(e=>setMessage(String(e)));},[]);
-  return <details className="provider-settings"><summary>Cấu hình AI · chưa xác minh kết nối</summary><p>M1 chỉ lưu cấu hình. Chưa có lời gọi ASR, dịch hoặc TTS. Khóa được đặt qua biến môi trường riêng của DubiSub.</p>{providers.map(p=><p key={p.kind}>{p.kind}: {p.endpoint} · {p.model||'Chưa chọn model'} · chưa xác minh</p>)}<form onSubmit={async e=>{e.preventDefault();try{const next=[...providers.filter(p=>p.kind!==kind),{kind,endpoint,model,key_env:keyEnv}];const saved=await api<{providers:Provider[]}>('/api/settings',{method:'PUT',...json({providers:next})});setProviders(saved.providers);setMessage('Đã lưu cấu hình; chưa kiểm tra provider.');}catch(e){setMessage(String(e));}}}><label>Loại provider<select value={kind} onChange={e=>setKind(e.target.value)}><option value="translation">Dịch</option><option value="asr">ASR</option><option value="tts">TTS</option></select></label><label>Endpoint<input type="url" required value={endpoint} onChange={e=>setEndpoint(e.target.value)}/></label><label>Model<input value={model} onChange={e=>setModel(e.target.value)}/></label><label>Tên biến môi trường khóa<input placeholder="DUBISUB_LLM_API_KEY" value={keyEnv} onChange={e=>setKeyEnv(e.target.value)}/></label><button>Lưu cấu hình</button></form><p role="status">{message}</p></details>;
-}
-
 function App(){
+  const [theme,setTheme]=useState<Theme>(()=>{try{return localStorage.getItem('dubisub.ui.v1.theme')==='light'?'light':'dark';}catch{return 'dark';}});
+  const [customCursor,setCustomCursor]=useState(()=>{try{return localStorage.getItem('dubisub.ui.v1.cursor')!=='system';}catch{return true;}});
+  const [settingsOpen,setSettingsOpen]=useState(false),[projectAction,setProjectAction]=useState<{kind:'edit'|'delete';project:Project}|null>(null),[removed,setRemoved]=useState<{id:string;name:string}|null>(null);
+  useEffect(()=>{document.documentElement.dataset.theme=theme;try{localStorage.setItem('dubisub.ui.v1.theme',theme);}catch{}},[theme]);
+  useEffect(()=>{document.documentElement.dataset.cursor=customCursor?'custom':'system';try{localStorage.setItem('dubisub.ui.v1.cursor',customCursor?'custom':'system');}catch{}},[customCursor]);
   const [library,setLibrary]=useState<Project[]>([]), [project,setProject]=useState<Project|null>(null);
   const [tool,setTool]=useState<Tool>('media'),[showCreate,setShowCreate]=useState(true),[aspect,setAspect]=useState('16/9'),[activeAssetId,setActiveAssetId]=useState('');
   const [trackId,setTrackId]=useState(''),[cues,setCues]=useState<Cue[]>([]);
@@ -87,7 +87,9 @@ function App(){
   const mediaMeta=media?.metadata?JSON.parse(media.metadata):null;
   const duration=Number(mediaMeta?.format?.duration||0);
   function seek(seconds:number){if(video.current)video.current.currentTime=seconds;}
-  function configure(){const settings=document.querySelector<HTMLDetailsElement>('.provider-settings');if(settings){settings.open=true;settings.scrollIntoView({behavior:'smooth',block:'nearest'});}}
+  function configure(){setSettingsOpen(true);}
+  async function manageProject(kind:'edit'|'delete',id:string){if(dirty||busy||saving.current)return;try{setProjectAction({kind,project:await api<Project>('/api/projects/'+id)});}catch(e){setError(String(e));}}
+
   const uploadInput=(kind:'media'|'subtitle')=><input type="file" accept={kind==='subtitle'?'.srt,.vtt,.ass':undefined} aria-label={kind==='media'?'Nhập video hoặc audio':'Nhập phụ đề'} disabled={busy||dirty} onChange={e=>{if(e.target.files?.[0])void upload(e.target.files[0],kind);e.target.value='';}}/>;
   return <div className="studio">
     <header className="appbar">
@@ -104,12 +106,14 @@ function App(){
         <label>Chế độ<select aria-label="Chế độ" value={mode} onChange={e=>setMode(e.target.value)}><option value="full">Dịch / lồng tiếng toàn bộ</option><option value="review">Review tóm tắt</option></select></label>
         <label>Ngôn ngữ đích (BCP 47)<input value={target} onChange={e=>setTarget(e.target.value)} required aria-describedby="language-help"/></label><button className="primary" disabled={busy||dirty} type="submit">Tạo dự án</button>
       </form><small id="language-help">Mặc định tiếng Việt (vi). English: en.</small></section>:null}
-      <nav className="project-list" aria-label="Dự án">{library.length?library.map(p=><button key={p.id} disabled={dirty||busy} className={project?.id===p.id?'active':''} onClick={()=>{void open(p.id);setShowCreate(false);}}><span className="project-icon"><Icon name="folder" size={17}/></span><span>{p.name}<small>{p.mode==='review'?'Review tóm tắt':'Dịch / lồng tiếng'}</small></span></button>):<p className="muted library-empty">Tất cả dự án của bạn sẽ ở đây.</p>}</nav>
+      <nav className="project-list" aria-label="Dự án">{library.length?library.map(p=><div className="project-row" key={p.id}><button disabled={dirty||busy} className={project?.id===p.id?'project-open active':'project-open'} onClick={()=>{void open(p.id);setShowCreate(false);}}><span className="project-icon"><Icon name="folder" size={17}/></span><span>{p.name}<small>{p.mode==='review'?'Review tóm tắt':'Dịch / lồng tiếng'}</small></span></button><div className="project-row-actions"><button className="icon-button" disabled={dirty||busy} aria-label={`Sửa dự án ${p.name}`} title="Sửa dự án" onClick={()=>void manageProject('edit',p.id)}>✎</button><button className="icon-button delete-action" disabled={dirty||busy} aria-label={`Xóa dự án ${p.name}`} title="Xóa dự án" onClick={()=>void manageProject('delete',p.id)}>×</button></div></div>):<p className="muted library-empty">Tất cả dự án của bạn sẽ ở đây.</p>}</nav>
+      {removed?<div className="restore-notice"><span>Đã xóa {removed.name} khỏi thư viện.</span><button onClick={async()=>{try{await api('/api/projects/'+removed.id+'/restore',{method:'POST'});await refreshLibrary();setRemoved(null);}catch(e){setError(String(e));}}}>Khôi phục dự án</button></div>:null}
       <div className="panel-heading media-heading"><h2>Phương tiện</h2><span className="count">{project?.assets?.length||0}</span></div>
       <label className="file media-upload"><Icon name="cloud" size={24}/><strong>Nhập video hoặc audio</strong><span>Kéo thả hoặc chọn từ máy</span>{uploadInput('media')}</label>
+      <LinkImport projectId={project?.id} links={project?.links||[]} locked={busy||dirty} ensureProject={async()=>{if(project)return project.id;const p=await api<Project>('/api/projects',{method:'POST',...json({name:'Video từ liên kết',mode,target_language:target})});load(p);setShowCreate(false);await refreshLibrary();return p.id;}} onImported={async id=>{if(!dirty&&!saving.current)load(await api<Project>('/api/projects/'+id));}}/>
       <div className="asset-list">{project?.assets?.map(a=><button key={a.id} className={media?.id===a.id?'asset active':'asset'} disabled={a.kind!=='media'||!a.metadata} onClick={()=>setActiveAssetId(a.id)}><span className="asset-icon"><Icon name={a.kind==='media'?'media':'captions'} size={19}/></span><span>{a.filename}<small>{a.kind==='subtitle'?'Phụ đề nguồn':a.metadata?`${Number(JSON.parse(a.metadata).format?.duration||0).toFixed(1)} giây`:'Đang kiểm tra…'}</small></span></button>)}</div>
-      <div className="jobs">{project?.jobs?.map(j=><div key={j.id}><span className={'job-dot '+j.state}/><strong>Kiểm tra media</strong><small>{j.state} · {j.progress}%</small>{j.error?<p role="alert">{j.error}</p>:null}{['queued','running'].includes(j.state)?<button onClick={()=>api(`/api/jobs/${j.id}/cancel`,{method:'POST'}).then(()=>open(project!.id)).catch(e=>setError(String(e)))}>Hủy</button>:null}{['failed','canceled'].includes(j.state)?<button onClick={()=>api(`/api/jobs/${j.id}/retry`,{method:'POST'}).then(()=>open(project!.id)).catch(e=>setError(String(e)))}>Thử lại</button>:null}</div>)}</div>
-      <ProviderSettings/>
+      <div className="jobs">{project?.jobs?.map(j=><div key={j.id}><span className={'job-dot '+j.state}/><strong>{j.kind==='inspect_link'?'Phân tích link':j.kind==='download_link'?'Nhập link':'Kiểm tra media'}</strong><small>{j.state} · {j.progress}%</small>{j.error?<p role="alert">{j.error}</p>:null}{['queued','running'].includes(j.state)?<button onClick={()=>api(`/api/jobs/${j.id}/cancel`,{method:'POST'}).then(()=>open(project!.id)).catch(e=>setError(String(e)))}>Hủy</button>:null}{['failed','canceled'].includes(j.state)?<button onClick={()=>api(`/api/jobs/${j.id}/retry`,{method:'POST'}).then(()=>open(project!.id)).catch(e=>setError(String(e)))}>Thử lại</button>:null}</div>)}</div>
+      <button className="library-config" onClick={configure}><Icon name="settings" size={16}/> Cài đặt studio</button>
       <div className="storage-note"><img src={logoUrl} width="25" height="25" alt=""/><span>Media gốc luôn được giữ nguyên.<small>Dữ liệu lưu trên máy của bạn.</small></span></div>
     </aside>
     <main className="stage">
@@ -133,6 +137,8 @@ function App(){
     <Timeline key={media?.id||'empty'} video={video} cues={cues} duration={duration} filename={media?.filename} onSeek={seek}/>
     <div className="appstatus"><span className="save-indicator"><i className={dirty?'unsaved':''}/><span role="status">{busy?'Đang nhập file…':status}</span></span><span className="status-right">DubiSub Studio <span>•</span> Cục bộ <span>•</span> {project?.target_language||target}</span></div>
     {error?<div className="error-toast" role="alert"><div><strong>Không thể hoàn tất thao tác</strong><button className="icon-button" aria-label="Đóng thông báo" onClick={()=>setError('')}>×</button></div><p>{error}</p>{conflict?<><p>Tải bản sửa dự phòng trước khi mở phiên bản mới.</p><button onClick={()=>{const url=URL.createObjectURL(new Blob([JSON.stringify({schema_version:1,project_id:project?.id,track_id:trackId,cues},null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='dubisub-unsaved-cues.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}}>Tải bản sửa dự phòng</button><button onClick={async()=>{if(project)load(await api<Project>('/api/projects/'+project.id));}}>Mở phiên bản mới</button></>:null}</div>:null}
+    <SettingsDialog open={settingsOpen} onClose={()=>setSettingsOpen(false)} theme={theme} onTheme={setTheme} cursor={customCursor} onCursor={setCustomCursor}/>
+    <ProjectDialog action={projectAction} onClose={()=>setProjectAction(null)} onSave={async p=>{await api<Project>('/api/projects/'+p.id,{method:'PATCH',...json({name:p.name,mode:p.mode,target_language:p.target_language,revision:p.revision})});if(project?.id===p.id)load(await api<Project>('/api/projects/'+p.id));await refreshLibrary();setStatus('Đã sửa thông tin dự án');}} onDelete={async p=>{await api('/api/projects/'+p.id,{method:'DELETE',...json({revision:p.revision})});if(project?.id===p.id){setProject(null);setTrackId('');setCues([]);setHistory([]);setFuture([]);setDirty(false);}setRemoved(p);await refreshLibrary();setStatus('Đã xóa dự án khỏi thư viện');}}/>
   </div>;
 }
 

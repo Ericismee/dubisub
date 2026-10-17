@@ -6,6 +6,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import urlopen
 from playwright.sync_api import sync_playwright, expect
@@ -31,12 +33,24 @@ def main():
         sub = work/'phụ đề.srt'
         sub.write_text('1\n00:00:00,100 --> 00:00:01,200\nXin chào Việt Nam!\n\n2\n00:00:01,300 --> 00:00:02,900\nمرحبا 世界\n', encoding='utf-8-sig')
         subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','testsrc2=s=320x180:r=24:d=3','-c:v','libx264','-pix_fmt','yuv420p','-y',str(sample)],check=True)
+        class FixtureHandler(BaseHTTPRequestHandler):
+            def log_message(self,*args):pass
+            def do_HEAD(self):self.serve(False)
+            def do_GET(self):self.serve(True)
+            def serve(self,body):
+                if self.path not in ('/fixture.mp4','/fixture.srt'):
+                    self.send_error(404);return
+                path=sample if self.path.endswith('.mp4') else sub
+                self.send_response(200);self.send_header('Content-Length',str(path.stat().st_size));self.send_header('Content-Type','video/mp4' if path==sample else 'text/plain');self.end_headers()
+                if body:self.wfile.write(path.read_bytes())
+        fixture=ThreadingHTTPServer(('127.0.0.1',0),FixtureHandler)
+        fixture_thread=threading.Thread(target=fixture.serve_forever,daemon=True);fixture_thread.start()
         env = dict(os.environ, DUBISUB_DATA_DIR=str(work/'dữ liệu riêng'))
         processes = []
         log = (work/'servers.log').open('w',encoding='utf-8')
         try:
             for args in ([sys.executable,'-m','uvicorn','backend.app:app','--host','127.0.0.1','--port','6060'],
-                         [sys.executable,'-m','backend.worker'],
+                         [sys.executable,str(ROOT/'tests/url_fixture_worker.py'),str(fixture.server_port)],
                          [shutil.which('node'),str(ROOT/'frontend/node_modules/vite/bin/vite.js'),'--host','127.0.0.1','--port','3600','--strictPort']):
                 processes.append(subprocess.Popen(args,cwd=ROOT/'frontend' if args[0]==shutil.which('node') else ROOT, env=env, stdout=log, stderr=log))
             for port in (6060,3600):
@@ -56,6 +70,21 @@ def main():
                 page.on('pageerror',lambda error:errors.append(str(error)))
                 page.goto('http://127.0.0.1:3600')
                 page.wait_for_load_state('networkidle')
+                assert page.evaluate('document.documentElement.dataset.theme')=='dark'
+                page.get_by_role('button',name='Cấu hình studio',exact=True).click()
+                settings=page.get_by_role('dialog',name='Cài đặt',exact=True)
+                expect(settings).to_be_visible()
+                settings.get_by_label('Sáng',exact=False).check()
+                assert page.evaluate('document.documentElement.dataset.theme')=='light'
+                settings.get_by_label('Tối',exact=False).check()
+                settings.get_by_role('navigation',name='Nhóm cấu hình').get_by_role('button',name='Dịch thuật',exact=True).click()
+                settings.get_by_label('Endpoint API',exact=True).fill('http://127.0.0.1:9999/v1')
+                settings.get_by_label('Model',exact=True).fill('configuration-only')
+                settings.get_by_role('button',name='Lưu cấu hình',exact=True).click()
+                page.wait_for_function("fetch('/api/settings').then(r=>r.json()).then(s=>s.providers.some(p=>p.kind==='translation'&&p.model==='configuration-only'))")
+                settings.get_by_role('navigation',name='Nhóm cấu hình').get_by_role('button',name='Lưu trữ & media',exact=True).click()
+                expect(settings.get_by_text('FFmpeg',exact=True)).to_be_visible()
+                settings.get_by_role('button',name='Đóng cài đặt',exact=True).click()
                 expect(page.get_by_role('heading',name='Tạo dự án',exact=True)).to_be_visible()
                 # All core studio surfaces exist before selecting or creating a project.
                 expect(page.get_by_role('navigation',name='Công cụ studio')).to_be_visible()
@@ -87,7 +116,7 @@ def main():
                 assert abs(page.locator('video').evaluate('(v)=>v.currentTime')-1.3)<.05
                 # Reopening must round-trip through SQLite, not component state.
                 page.reload();page.wait_for_load_state('networkidle')
-                page.get_by_role('button',name='Bản dịch thử nghiệm',exact=False).click()
+                page.locator('.project-open').filter(has_text='Bản dịch thử nghiệm').click()
                 expect(page.get_by_label('Câu 1',exact=True)).to_have_value('Chào DubiSub — tiếng Việt 世界')
                 expect(page.get_by_label('Câu 2',exact=True)).to_have_value('مرحبا 世界')
                 page.wait_for_function('document.querySelector("video")?.textTracks[0]?.cues?.length === 2')
@@ -121,11 +150,40 @@ def main():
                 page.screenshot(path='test-results/studio-mobile.png',full_page=True)
                 assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
                 assert not errors, errors
+                page.set_viewport_size({'width':1440,'height':1000})
+                page.get_by_role('button',name='Sửa dự án Bản dịch thử nghiệm',exact=True).click()
+                edit=page.get_by_role('dialog',name='Sửa dự án',exact=True)
+                edit.get_by_label('Tên dự án mới',exact=True).fill('Bản dịch đã sửa')
+                edit.get_by_role('button',name='Lưu thay đổi',exact=True).click()
+                expect(page.get_by_role('heading',name='Bản dịch đã sửa',exact=True)).to_be_visible()
+                page.get_by_role('button',name='Xóa dự án Bản dịch đã sửa',exact=True).click()
+                remove=page.get_by_role('dialog',name='Xóa dự án',exact=True)
+                remove.get_by_role('button',name='Hủy',exact=True).click()
+                expect(page.get_by_role('heading',name='Bản dịch đã sửa',exact=True)).to_be_visible()
+                page.get_by_role('button',name='Xóa dự án Bản dịch đã sửa',exact=True).click()
+                remove.get_by_role('button',name='Xóa dự án',exact=True).click()
+                expect(page.get_by_role('button',name='Khôi phục dự án',exact=True)).to_be_visible()
+                expect(page.locator('.project-open').filter(has_text='Bản dịch đã sửa')).to_have_count(0)
+                page.get_by_role('button',name='Khôi phục dự án',exact=True).click()
+                page.locator('.project-open').filter(has_text='Bản dịch đã sửa').click()
+                expect(page.get_by_label('Câu 1',exact=True)).to_have_value('Chào DubiSub — tiếng Việt 世界')
+                page.screenshot(path='test-results/studio-dark-managed.png',full_page=True)
+                page.get_by_role('button',name='Cấu hình studio',exact=True).click()
+                page.screenshot(path='test-results/studio-settings.png',full_page=True)
+                page.get_by_role('button',name='Đóng cài đặt',exact=True).click()
+                page.get_by_label('Link YouTube hoặc file trực tiếp',exact=True).fill(f'http://127.0.0.1:{fixture.server_port}/fixture.mp4')
+                page.get_by_role('button',name='Phân tích liên kết',exact=True).click()
+                expect(page.locator('.link-details').get_by_text('fixture.mp4',exact=True)).to_be_visible(timeout=15000)
+                page.get_by_role('button',name='Nhập vào dự án',exact=True).click()
+                expect(page.get_by_role('button',name='Đã nhập vào dự án',exact=True)).to_be_visible(timeout=15000)
+                expect(page.locator('.asset-list .asset')).to_have_count(3,timeout=15000)
+                page.screenshot(path='test-results/studio-link-import.png',full_page=True)
                 browser.close()
                 print('PASS: real upload/probe, video seek, Unicode/RTL edit, autosave, undo/redo, reopen, SRT/VTT downloads, keyboard focus, mobile width; no browser errors')
         except Exception:
             if 'page' in locals():
-                print(page.locator('body').inner_text().encode('ascii','backslashreplace').decode())
+                try: print(page.locator('body').inner_text().encode('ascii','backslashreplace').decode())
+                except Exception: pass
             log.flush()
             print((work/'servers.log').read_text(encoding='utf-8',errors='replace')[-6000:])
             raise
@@ -136,6 +194,7 @@ def main():
                 try:process.wait(timeout=10)
                 except subprocess.TimeoutExpired:process.kill();process.wait()
             log.close()
+            fixture.shutdown();fixture.server_close();fixture_thread.join()
 
 
 if __name__=='__main__':main()

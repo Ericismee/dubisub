@@ -56,6 +56,13 @@ class CreateProject(BaseModel):
     mode: Literal['full', 'review'] = 'full'
     target_language: str = 'vi'
 
+    @field_validator('name')
+    @classmethod
+    def project_name(cls, value):
+        value=value.strip()
+        if not value:raise ValueError('Tên dự án không được để trống.')
+        return value
+
     @field_validator('target_language')
     @classmethod
     def language(cls, value):
@@ -130,7 +137,7 @@ def settings():
 @app.get('/api/projects')
 def projects():
     with store.connect() as db:
-        rows = db.execute('SELECT document FROM projects ORDER BY rowid DESC LIMIT 100').fetchall()
+        rows = db.execute("SELECT document FROM projects WHERE COALESCE(json_extract(document,'$.deleted'),0)=0 ORDER BY rowid DESC LIMIT 100").fetchall()
     return [{k:v for k,v in json.loads(r[0]).items() if k != 'tracks'} for r in rows]
 
 
@@ -140,6 +147,49 @@ def create(body: CreateProject):
     with store.connect() as db:
         db.execute('INSERT INTO projects VALUES (?,?)', (document['id'], json.dumps(document)))
     return document
+
+
+class ProjectEdit(CreateProject):
+    revision: int
+
+
+class ProjectDelete(BaseModel):
+    revision: int
+
+
+@app.patch('/api/projects/{project_id}')
+def update_project(project_id: str, body: ProjectEdit):
+    with store.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        doc=store.project(db,project_id)
+        if doc['revision']!=body.revision:
+            raise HTTPException(409,'Dự án đã thay đổi. Hãy mở lại trước khi sửa thông tin.')
+        doc.update(body.model_dump(exclude={'revision'}))
+        store.save(db,doc)
+    return doc
+
+
+@app.delete('/api/projects/{project_id}')
+def delete_project(project_id: str, body: ProjectDelete):
+    with store.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        doc=store.project(db,project_id)
+        if doc['revision']!=body.revision:
+            raise HTTPException(409,'Dự án đã thay đổi. Hãy mở lại trước khi xóa.')
+        doc['deleted']=True
+        db.execute("UPDATE jobs SET state='canceled' WHERE project_id=? AND state IN ('queued','running')",(project_id,))
+        store.save(db,doc)
+    return {'id':project_id,'deleted':True,'can_restore':True}
+
+
+@app.post('/api/projects/{project_id}/restore')
+def restore_project(project_id: str):
+    with store.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        row=db.execute('SELECT document FROM projects WHERE id=?',(project_id,)).fetchone()
+        if not row:raise KeyError(project_id)
+        doc=json.loads(row[0]);doc['deleted']=False;store.save(db,doc)
+    return doc
 
 
 @app.get('/api/projects/{project_id}')
@@ -186,8 +236,9 @@ def inspect_link(project_id: str, body: LinkRequest):
 def link_info(link_id: str):
     from .link_sources import public_info
     with store.connect() as db:
-        row=db.execute('SELECT * FROM link_imports WHERE id=?',(link_id,)).fetchone()
+        row=db.execute('SELECT link_imports.*,assets.project_id FROM link_imports JOIN assets ON assets.id=link_imports.id WHERE link_imports.id=?',(link_id,)).fetchone()
         if not row:raise KeyError(link_id)
+        store.project(db,row['project_id'])
         jobs=[dict(r) for r in db.execute('SELECT id,kind,state,progress,error,attempts FROM jobs WHERE asset_id=? ORDER BY rowid DESC',(link_id,))]
     return {'id':link_id,'info':public_info(json.loads(row['inspection'])) if row['inspection'] else None,'jobs':jobs}
 
@@ -200,6 +251,7 @@ def import_link(link_id: str, body: LinkSelection):
         db.execute('BEGIN IMMEDIATE')
         row=db.execute('SELECT link_imports.*,assets.project_id FROM link_imports JOIN assets ON assets.id=link_imports.id WHERE link_imports.id=?',(link_id,)).fetchone()
         if not row:raise KeyError(link_id)
+        store.project(db,row['project_id'])
         if not row['inspection']:raise HTTPException(409,'Chờ phân tích nguồn hoàn tất.')
         download_plan(json.loads(row['inspection']),body.model_dump())
         if db.execute("SELECT id FROM jobs WHERE asset_id=? AND kind='download_link' AND state IN ('queued','running','succeeded')",(link_id,)).fetchone():
@@ -283,6 +335,7 @@ def download(project_id: str, track_id: str, format: Literal['srt', 'vtt'] = 'sr
 @app.get('/api/projects/{project_id}/assets/{asset_id}/content')
 def media(project_id: str, asset_id: str):
     with store.connect() as db:
+        store.project(db,project_id)
         row = db.execute('SELECT * FROM assets WHERE id=? AND project_id=? AND kind="media"',
                          (asset_id, project_id)).fetchone()
     if row is None:
@@ -296,6 +349,9 @@ def media(project_id: str, asset_id: str):
 @app.post('/api/jobs/{job_id}/{action}')
 def control(job_id: str, action: Literal['cancel', 'retry']):
     with store.connect() as db:
+        row=db.execute('SELECT project_id FROM jobs WHERE id=?',(job_id,)).fetchone()
+        if not row:raise KeyError(job_id)
+        store.project(db,row['project_id'])
         if action == 'cancel':
             result = db.execute("UPDATE jobs SET state='canceled' WHERE id=? AND state IN ('queued','running')", (job_id,))
         else:

@@ -83,8 +83,8 @@ def download_plan(info, selection):
 def execute(job_id, client=None):
     def check():
         with store.connect() as db:
-            row=db.execute('SELECT state FROM jobs WHERE id=?',(job_id,)).fetchone()
-        if not row or row['state']!='running':raise ValueError('Tác vụ đã hủy hoặc bị gián đoạn.')
+            row=db.execute('SELECT state,owner FROM jobs WHERE id=?',(job_id,)).fetchone()
+        if not row or row['state']!='running' or row['owner']!=job['owner']:raise ValueError('Tác vụ đã hủy hoặc bị gián đoạn.')
     with store.connect() as db:
         job=dict(db.execute('SELECT * FROM jobs WHERE id=?',(job_id,)).fetchone())
         link=dict(db.execute('SELECT * FROM link_imports WHERE id=?',(job['asset_id'],)).fetchone())
@@ -93,6 +93,7 @@ def execute(job_id, client=None):
         info=inspect_source(link['url'],client)
         if info.get('duration') and info['duration']>43200:
             raise ValueError('Chỉ nhận media dài tối đa 12 giờ.')
+        check()
         with store.connect() as db:
             db.execute('UPDATE link_imports SET inspection=? WHERE id=?',(json.dumps(info),link['id']))
         return {'inspected':True}
@@ -119,7 +120,7 @@ def execute(job_id, client=None):
         size=path.stat().st_size
         cap-=size
         if cap<0:raise ValueError('Tổng file vượt giới hạn dung lượng nhập.')
-        files.append({'path':str(path),'kind':item['kind'],'ext':item['ext'], 'language':item.get('language','und'),
+        files.append({'path':str(path),'kind':item['kind'],'ext':item['ext'], 'language':item.get('language') or 'und',
                       'automatic':item.get('automatic',False)})
     return {'files':files,'title':info['title'],'source_url':info['source_url'],'source':info['source']}
 

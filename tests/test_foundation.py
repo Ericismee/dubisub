@@ -138,3 +138,25 @@ def test_provider_config_and_local_origin(client, monkeypatch):
     assert client.post('/api/projects',json={'name':'evil'},headers={'Origin':'https://untrusted.example'}).status_code == 403
     body['providers'][0]['endpoint'] = 'https://user:secret@example.com/v1?key=secret'
     assert client.put('/api/settings',json=body).status_code == 422
+
+
+def test_project_edit_delete_restore_preserves_source(client):
+    pid=create(client)
+    client.post(f'/api/projects/{pid}/upload',data={'kind':'media'},files={'file':('source.mp4',b'source immutable')})
+    p=client.get(f'/api/projects/{pid}').json()
+    with store.connect() as db:
+        source=db.execute('SELECT path FROM assets WHERE project_id=?',(pid,)).fetchone()[0]
+    body={'name':'Tên mới 世界','mode':'full','target_language':'en-us','revision':p['revision']}
+    response=client.patch('/api/projects/'+pid,json=body)
+    assert response.status_code==200
+    p=response.json();assert p['name']=='Tên mới 世界' and p['target_language']=='en-US'
+    assert client.patch('/api/projects/'+pid,json=body).status_code==409
+    assert client.request('DELETE','/api/projects/'+pid,json={'revision':0}).status_code==409
+    assert client.request('DELETE','/api/projects/'+pid,json={'revision':p['revision']}).status_code==200
+    assert all(p['id']!=pid for p in client.get('/api/projects').json())
+    assert client.get('/api/projects/'+pid).status_code==404
+    from pathlib import Path
+    assert Path(source).read_bytes()==b'source immutable'
+    with store.connect() as db:assert db.execute('SELECT state FROM jobs WHERE project_id=?',(pid,)).fetchone()[0]=='canceled'
+    assert client.post('/api/projects/'+pid+'/restore').status_code==200
+    assert client.get('/api/projects/'+pid).json()['assets'][0]['checksum']

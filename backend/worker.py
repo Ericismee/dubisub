@@ -81,7 +81,8 @@ def finish_link(job, result):
         digest=__import__('hashlib').sha256()
         with path.open('rb') as source:
             while chunk:=source.read(1024**2):digest.update(chunk)
-        title=(result['title'][:180]+'.'+item['ext']).replace('\x00','')
+        base=result['title'][:180]
+        title=(base if base.lower().endswith('.'+item['ext']) else base+'.'+item['ext']).replace('\x00','')
         prepared.append((aid,item,path,destination,digest.hexdigest(),title))
     try:
         with store.connect() as db:
@@ -102,7 +103,7 @@ def finish_link(job, result):
         raise
 
 
-def run_once():
+def run_once(*, link_executor=None):
     with store.connect() as db:
         db.execute('BEGIN IMMEDIATE')
         db.execute("UPDATE jobs SET state=CASE WHEN attempts<3 THEN 'queued' ELSE 'failed' END,error='Recovered interrupted worker' WHERE state='running' AND heartbeat<?", (time.time()-30,))
@@ -113,7 +114,7 @@ def run_once():
         db.execute("UPDATE jobs SET state='running',attempts=attempts+1,heartbeat=?,owner=?,progress=10 WHERE id=?", (time.time(), OWNER, job['id']))
     try:
         if job['kind'] in ('inspect_link','download_link'):
-            result=json.loads(command([sys.executable,'-m','backend.link_tasks',job['id']],job,timeout=180 if job['kind']=='inspect_link' else 10800))
+            result=link_executor(job['id']) if link_executor else json.loads(command([sys.executable,'-m','backend.link_tasks',job['id']],job,timeout=180 if job['kind']=='inspect_link' else 10800))
             finish_link(job,result)
             return True
         metadata = json.loads(command([os.getenv('DUBISUB_FFPROBE', 'ffprobe'), '-v', 'error', '-protocol_whitelist', 'file,pipe', '-format_whitelist', FORMATS,
