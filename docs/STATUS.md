@@ -87,3 +87,12 @@ Verification: backend 24 tests passed before adding the Ollama-specific test; Ol
 Remaining: live Ollama/ASR model inference, full review-script generation, full video dubbing/speaker mapping/alignment, multitrack editing/effects/transitions, broad provider-specific voice adapters, long-media/crash/disk exhaustion and comprehensive accessibility QA. Product is NOT feature-complete. Previous M2 limits still apply except thumbnail and HEAD fallback now implemented. No NotebookE files/settings/secrets accessed.
 
 Final verification: 25 backend tests passed (including native Ollama tags/chat fixture), TypeScript/Vite build and extended Playwright browser flow passed. Ollama has no live service at default port during this run; no live LLM/ASR claim.
+
+
+## URL import repair — 2026-10-18
+- Observed actual user download: 73-minute YouTube video, format399 1440p, estimated317MB; staging grew from31MB to50MB during diagnosis and heartbeat remained current. It was downloading slowly, not frozen. Previous download attempts had source rejection. Existing running child was preserved, not canceled/restarted.
+- YouTube download rejection HTTP401/403/410 now refreshes signed URLs once through the same guarded extractor, preserving explicit format/subtitle IDs. Old representation/validator is discarded before the refreshed request; no cookie access or network-policy bypass. Other failures remain explicit.
+- UI shows estimated format size, byte count/speed/file count when the worker provides them; stale prior errors hidden while retry runs. Existing active download keeps its old child code; detailed transfer API requires the next normal application restart.
+- Live independent YouTube smoke jNQXAC9IVRw: inspect, actual format160 download, audio merge and probe succeeded in temporary storage. Controlled URL regressions6 passed, including bounded signed-URL refresh and Unicode subtitle preservation. Frontend build passed. This does not guarantee every YouTube source or the current long import/subtitle selections will succeed.
+
+Final link checks: 26 backend tests passed; browser controlled-response test passed for byte/speed/size display and hiding stale errors; no page errors.

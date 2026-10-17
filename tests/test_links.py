@@ -118,3 +118,35 @@ def test_link_video_download_and_probe(fixture_source,monkeypatch):
         p=client.get('/api/projects/'+pid).json()
         assert all(j['state']=='succeeded' for j in p['jobs']),p['jobs']
         assert json.loads(p['assets'][0]['metadata'])['streams'][0]['width']==160
+
+
+def test_youtube_signed_url_refresh_preserves_selection(fixture_source,monkeypatch):
+    url,origin,directory=fixture_source
+    monkeypatch.setenv('DUBISUB_DATA_DIR',str(directory/'refresh-db'))
+    calls=[]
+    def inspection(source,client):
+        calls.append(source)
+        return {'title':'fixture','duration':1,'source':'youtube','source_url':'https://www.youtube.com/watch?v=jNQXAC9IVRw','formats':[], 'subtitles':[{'id':'manual:vi','language':'vi','automatic':False,'ext':'vtt','url':url+'/sample.vtt'}]}
+    monkeypatch.setattr(link_tasks,'inspect_source',inspection)
+    original=link_tasks.stream_file
+    attempts=[]
+    def download(client,source,path,cap,**kwargs):
+        attempts.append(source)
+        if len(attempts)==1:
+            path.write_bytes(b'old-representation')
+            path.with_suffix('.validator').write_text('old')
+            raise link_tasks.DownloadRejected('fixture 403')
+        assert not path.exists() and not path.with_suffix('.validator').exists()
+        return original(client,source,path,cap,**kwargs)
+    monkeypatch.setattr(link_tasks,'stream_file',download)
+    with TestClient(app) as c:
+        pid=c.post('/api/projects',json={'name':'refresh fixture'}).json()['id']
+        lid=c.post(f'/api/projects/{pid}/links',json={'url':'https://youtu.be/jNQXAC9IVRw'}).json()['link_id']
+        execute=lambda jid:link_tasks.execute(jid,SafeHTTP(test_origin=origin))
+        assert worker.run_once(link_executor=execute)
+        assert c.post('/api/links/'+lid+'/download',json={'mode':'subtitles','subtitle_ids':['manual:vi']}).status_code==202
+        assert worker.run_once(link_executor=execute)
+        state=c.get('/api/links/'+lid).json()
+        assert state['jobs'][0]['state']=='succeeded',state
+        assert len(calls)==2 and len(attempts)==2
+        assert c.get('/api/projects/'+pid).json()['tracks'][0]['cues'][0]['text']=='Chào từ link 世界'

@@ -12,6 +12,10 @@ from .link_sources import inspect_source
 from .safe_http import SafeHTTP
 
 
+class DownloadRejected(ValueError):
+    pass
+
+
 def stream_file(client, url, path, cap, headers=None, progress=lambda size,total:None):
     """Resume only if a validator is present and Content-Range exactly matches."""
     validator_path=path.with_suffix('.validator')
@@ -24,6 +28,8 @@ def stream_file(client, url, path, cap, headers=None, progress=lambda size,total
         previous=0
     with client.open(url, headers=request_headers) as response:
         if response.status not in (200,206):
+            if response.status in (401,403,410):
+                raise DownloadRejected('URL tải tạm bị nguồn từ chối. Hãy phân tích lại liên kết.')
             raise ValueError('Nguồn từ chối tải file. Hãy phân tích lại liên kết rồi thử lại.')
         if response.headers.get('Content-Encoding','identity') not in ('identity',''):
             raise ValueError('Định dạng truyền tải nén chưa được hỗ trợ.')
@@ -119,14 +125,28 @@ def execute(job_id, client=None):
         path=directory/f'{index}.part'
         file_cap=min(cap,8*1024**2) if item['kind']=='subtitle' else cap
         last_update=0
+        started=time.monotonic()
         def progress(size,total):
             nonlocal last_update
             if time.monotonic()-last_update<.5:return
             last_update=time.monotonic()
             value=int(10+75*(index+(size/total if total else 0))/len(plan))
             with store.connect() as db:
-                db.execute("UPDATE jobs SET progress=? WHERE id=? AND state='running'",(value,job_id))
-        stream_file(client,item['url'],path,file_cap,headers=item.get('http_headers'),progress=progress)
+                status={'downloaded_bytes':size,'total_bytes':total,'file_index':index+1,'file_count':len(plan),'bytes_per_second':round(size/max(time.monotonic()-started,.1))}
+                db.execute("UPDATE jobs SET progress=?,checkpoint=? WHERE id=? AND owner=? AND state='running'",(value,json.dumps(status),job_id,job['owner']))
+        try:
+            stream_file(client,item['url'],path,file_cap,headers=item.get('http_headers'),progress=progress)
+        except DownloadRejected:
+            if info.get('source')!='youtube':raise
+            # Refresh signed URLs once, preserving the user's explicit format/track IDs.
+            refreshed=inspect_source(link['url'],client)
+            refreshed_plan=download_plan(refreshed,selection)
+            replacement=refreshed_plan[index]
+            if replacement['kind']!=item['kind'] or replacement['ext']!=item['ext']:
+                raise ValueError('Định dạng nguồn đã thay đổi. Hãy phân tích lại và chọn định dạng.')
+            # A validator from the old representation must never resume a new URL.
+            path.unlink(missing_ok=True);path.with_suffix('.validator').unlink(missing_ok=True)
+            stream_file(client,replacement['url'],path,file_cap,headers=replacement.get('http_headers'),progress=progress)
         size=path.stat().st_size
         cap-=size
         if cap<0:raise ValueError('Tổng file vượt giới hạn dung lượng nhập.')
@@ -140,5 +160,5 @@ if __name__=='__main__':
         print(json.dumps(execute(sys.argv[1])))
     except Exception as exc:
         # All messages here are ours; exceptions from network libs may contain signed URLs.
-        message=str(exc) if type(exc) is ValueError else 'Không tải được nguồn hoặc nguồn bị chặn bởi chính sách mạng.'
+        message=str(exc) if type(exc) in (ValueError,DownloadRejected) else 'Không tải được nguồn hoặc nguồn bị chặn bởi chính sách mạng.'
         print(json.dumps({'error':message}))

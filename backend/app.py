@@ -251,7 +251,12 @@ def link_info(link_id: str):
         row=db.execute('SELECT link_imports.*,assets.project_id FROM link_imports JOIN assets ON assets.id=link_imports.id WHERE link_imports.id=?',(link_id,)).fetchone()
         if not row:raise KeyError(link_id)
         store.project(db,row['project_id'])
-        jobs=[dict(r) for r in db.execute('SELECT id,kind,state,progress,error,attempts FROM jobs WHERE asset_id=? ORDER BY rowid DESC',(link_id,))]
+        jobs=[dict(r) for r in db.execute('SELECT id,kind,state,progress,error,attempts,checkpoint FROM jobs WHERE asset_id=? ORDER BY rowid DESC',(link_id,))]
+    for job in jobs:
+        raw=job.pop('checkpoint')
+        try:status=json.loads(raw) if raw and job['kind']=='download_link' else {}
+        except ValueError:status={}
+        job['transfer']={k:status[k] for k in ('downloaded_bytes','total_bytes','file_index','file_count','bytes_per_second') if k in status} if isinstance(status,dict) else {}
     return {'id':link_id,'info':public_info(json.loads(row['inspection'])) if row['inspection'] else None,'jobs':jobs}
 
 
