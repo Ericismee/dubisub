@@ -6,6 +6,7 @@ import {ProjectDialog} from './ProjectDialog';
 import {LinkImport} from './LinkImport';
 import logoUrl from '../../assets/logo.svg';
 import wordmarkUrl from '../../assets/wordmark.svg';
+import wordmarkDarkUrl from '../../assets/wordmark-dark.svg';
 import bannerUrl from '../../assets/banner.svg';
 import {Icon, Timeline, ToolInfo, tools, type Tool} from './StudioParts';
 
@@ -93,7 +94,7 @@ function App(){
   const uploadInput=(kind:'media'|'subtitle')=><input type="file" accept={kind==='subtitle'?'.srt,.vtt,.ass':undefined} aria-label={kind==='media'?'Nhập video hoặc audio':'Nhập phụ đề'} disabled={busy||dirty} onChange={e=>{if(e.target.files?.[0])void upload(e.target.files[0],kind);e.target.value='';}}/>;
   return <div className="studio">
     <header className="appbar">
-      <a className="brand" href="/" aria-label="DubiSub Studio"><img className="brand-wordmark" src={wordmarkUrl} alt="DubiSub"/><small>studio</small></a>
+      <a className="brand" href="/" aria-label="DubiSub Studio"><img className="brand-wordmark" src={theme==='dark'?wordmarkDarkUrl:wordmarkUrl} alt="DubiSub"/><small>studio</small></a>
       <div className="project-heading"><Icon name="folder" size={17}/><h1>{project?.name||'Dự án chưa đặt tên'}</h1><span className="project-state">{project?'Lưu cục bộ':'Không gian sáng tạo của bạn'}</span></div>
       <div className="header-actions"><span className="badge"><i/> AI chưa kết nối</span><button className="icon-button" aria-label="Cấu hình studio" onClick={configure}><Icon name="settings"/></button><button className="primary" onClick={()=>{setTool('export');document.querySelector('.export-panel')?.scrollIntoView({behavior:'smooth',block:'nearest'});}}><Icon name="export" size={16}/> Xuất phụ đề</button></div>
     </header>

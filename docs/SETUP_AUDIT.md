@@ -42,3 +42,8 @@ Data for E2E is isolated in a temporary directory; test server processes are sto
 Launch: `uv sync --locked`, `npm ci --prefix frontend`, `powershell -ExecutionPolicy Bypass -File scripts/start.ps1`; open http://127.0.0.1:3600. Environment variables are read from the process; `.env.example` is documentation and `.env` is not automatically loaded. Sample: `.venv/Scripts/python scripts/make_sample.py`.
 
 Verdict: M1 local foundation baseline runs and has end-to-end evidence. AI providers, URL networking, video editing/rendering and production packaging remain future milestones.
+
+
+## URL-import and studio update
+
+yt-dlp 2026.8.19 is pinned in pyproject.toml/uv.lock. Its request-handler interface was inspected locally; all handlers are replaced by the DNS-pinned safe transport. No Node/remote JS solver, browser cookie or proxy integration was enabled. Manual YouTube sample jNQXAC9IVRw imported and probed successfully in temporary storage; automated tests use an explicitly injected local fixture policy. SQLite schema is now 3; connections close after transactions on Windows. Latest checks: 14 pytest tests, TypeScript/build and extended Edge E2E passed. UI is dark by default with separate settings groups and recoverable project deletion. See STATUS for unsupported source types and incomplete M2 areas.
