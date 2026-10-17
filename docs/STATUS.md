@@ -70,3 +70,35 @@ Evidence:
 - Screenshots inspected: `test-results/studio-dark-managed.png`, `studio-settings.png`, `studio-link-import.png` (ignored).
 
 Remaining M2 limitations: no playlist, live streams, DRM, authenticated/cookie sources, arbitrary page extractors, thumbnail preview, HLS/DASH manifest downloads or JS challenge runtime. Only direct HTTP(S) formats reported by the YouTube extractor are offered; some videos may require unsupported verification. Direct servers must support HEAD. Format links can expire; re-analyze the source. No automatic ASR/translation is triggered. Full crash/disk-exhaustion and large-file benchmarks remain pending. Do not call M2 complete beyond this verified baseline.
+
+
+## AI workflows, subtitle editing, voice samples and MP4 export — 2026-10-18
+
+Implemented:
+- Durable ASR and multilingual translation jobs through explicitly configured providers. Translation preserves original IDs/timing and source tracks, uses glossary, validates exact cue IDs/order, checkpoints batches and resumes manual retries. Source changes invalidate translation approval. ASR extracts real PCM chunks and uses actual segment timestamps; no synthetic output fallback.
+- Ollama native `/api/tags` + `/api/chat` and OpenAI-compatible translation. Settings separate protocol, endpoint, actual discovered models and a catalog of 24 Ollama families. Catalog entries are suggestions, never proof of installation/quality. No automatic model pull or silent fallback. Ollama CLI exists locally; default port 11434 was not listening during inspection. Live LLM and ASR inference remain unverified pending an available configured service/model.
+- Manual subtitle tracks, split/merge/delete/add, find/replace, timing offset, CPS display, existing autosave/undo/redo, SRT/VTT/ASS export. ASS neutralizes literal override braces with fullwidth braces and literal backslashes with word joiners; ASS has centisecond precision.
+- Provider voice discovery with language/gender filtering, standard/custom sample text, real cached WAV samples and stop-on-language/voice-change playback. Actual configured VieNeu service returned 25 voices and one Vietnamese sample completed successfully. This does not verify every voice/language. Providers lacking declared language metadata are not assigned invented multilingual capabilities.
+- Single-source render plan shared with preview: trim, speed, canvas aspect, resolution/fps, volume, optional approved subtitles; durable FFmpeg MP4 jobs and owned artifact download. Actual exported AV duration, trim colors, dimensions and immutable input checksum tested. Not a multitrack compositor; browser preview volume is capped at 1 and subtitle styling is not pixel-identical to ASS rendering.
+- Persistent project trash/restore, project search, guarded thumbnail cache and direct HEAD-rejected URL Range fallback.
+
+Verification: backend 24 tests passed before adding the Ollama-specific test; Ollama test and final totals recorded below. TypeScript/Vite production build passed. Full Playwright flow passed before Ollama controls, including subtitle editing, real MP4 export/download, controlled translation, voice sample cache/playback and original import/settings/project flows. Controlled AI fixtures verify adapter behavior, not AI quality. Actual TTS sample separately verified. One existing Starlette/AnyIO deprecation warning remains.
+
+Remaining: live Ollama/ASR model inference, full review-script generation, full video dubbing/speaker mapping/alignment, multitrack editing/effects/transitions, broad provider-specific voice adapters, long-media/crash/disk exhaustion and comprehensive accessibility QA. Product is NOT feature-complete. Previous M2 limits still apply except thumbnail and HEAD fallback now implemented. No NotebookE files/settings/secrets accessed.
+
+Final verification: 25 backend tests passed (including native Ollama tags/chat fixture), TypeScript/Vite build and extended Playwright browser flow passed. Ollama has no live service at default port during this run; no live LLM/ASR claim.
+
+
+## URL import repair — 2026-10-18
+- Observed actual user download: 73-minute YouTube video, format399 1440p, estimated317MB; staging grew from31MB to50MB during diagnosis and heartbeat remained current. It was downloading slowly, not frozen. Previous download attempts had source rejection. Existing running child was preserved, not canceled/restarted.
+- YouTube download rejection HTTP401/403/410 now refreshes signed URLs once through the same guarded extractor, preserving explicit format/subtitle IDs. Old representation/validator is discarded before the refreshed request; no cookie access or network-policy bypass. Other failures remain explicit.
+- UI shows estimated format size, byte count/speed/file count when the worker provides them; stale prior errors hidden while retry runs. Existing active download keeps its old child code; detailed transfer API requires the next normal application restart.
+- Live independent YouTube smoke jNQXAC9IVRw: inspect, actual format160 download, audio merge and probe succeeded in temporary storage. Controlled URL regressions6 passed, including bounded signed-URL refresh and Unicode subtitle preservation. Frontend build passed. This does not guarantee every YouTube source or the current long import/subtitle selections will succeed.
+
+Final link checks: 26 backend tests passed; browser controlled-response test passed for byte/speed/size display and hiding stale errors; no page errors.
+
+
+## Pre-merge code review — 2026-10-18
+Reviewed AI/provider responses, source timing and approval, worker leases/cancellation, file commits and URL retry boundaries. Fixed voice catalog validation for malformed model/language metadata and stale pending voice-sample state on project switch. Added provider-metadata regression. Backend27 tests and frontend production build passed. Latest origin/main merged without conflict. Existing long import left running.
+
+Pre-merge browser regression passed in isolated temporary storage on ports3601/6061. A test-only Playwright header override supplied the standard allowed origin; production origin policy was unchanged. Upload/probe, subtitle edit/autosave/undo, exports, translation/voice fixtures, project management and URL import passed with no browser errors. GitHub connector PR creation unavailable (403 integration permissions); merge performed through authorized Git access.

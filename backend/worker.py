@@ -6,6 +6,7 @@ import tempfile
 import time
 import shutil
 import sys
+import threading
 from pathlib import Path
 from . import store
 from .subtitles import parse
@@ -18,9 +19,9 @@ class Canceled(Exception):
     pass
 
 
-def command(args, job, timeout=120):
+def command(args, job, timeout=120, cwd=None):
     with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
-        process = subprocess.Popen(args, stdout=output, stderr=errors, stdin=subprocess.DEVNULL)
+        process = subprocess.Popen(args, stdout=output, stderr=errors, stdin=subprocess.DEVNULL, cwd=cwd)
         started = time.monotonic()
         try:
             while process.poll() is None:
@@ -111,8 +112,39 @@ def run_once(*, link_executor=None):
         if row is None:
             return False
         job = dict(row)
+        job['owner']=OWNER
         db.execute("UPDATE jobs SET state='running',attempts=attempts+1,heartbeat=?,owner=?,progress=10 WHERE id=?", (time.time(), OWNER, job['id']))
+    stop=threading.Event()
+    def heartbeat():
+        while not stop.wait(5):
+            try:
+                with store.connect() as db:
+                    db.execute("UPDATE jobs SET heartbeat=? WHERE id=? AND owner=? AND state='running'",(time.time(),job['id'],OWNER))
+            except Exception:pass
+    thread=threading.Thread(target=heartbeat,daemon=True);thread.start()
     try:
+        if job['kind']=='voice_sample':
+            from .voices import execute
+            execute(job,command)
+            return True
+        if job['kind']=='render':
+            from .rendering import execute
+            execute(job,command)
+            return True
+        if job['kind'] in ('translate','transcribe'):
+            if job['kind']=='transcribe':
+                metadata=json.loads(db_metadata(job['asset_id']))
+                duration=float(metadata.get('format',{}).get('duration',0))
+                if not 0<duration<=43200:raise ValueError('ASR cần media có thời lượng xác định, tối đa 12 giờ.')
+                directory=store.root()/'ai-staging'/job['id'];directory.mkdir(parents=True,exist_ok=True)
+                if shutil.disk_usage(directory).free<duration*32000+128*1024**2:raise ValueError('Không đủ đĩa để tạo audio phục vụ ASR.')
+                payload=json.loads(job['payload'])
+                command([os.getenv('DUBISUB_FFMPEG','ffmpeg'),'-v','error','-nostdin','-protocol_whitelist','file,pipe','-format_whitelist',FORMATS,
+                         '-i',job['path'],'-map',f'0:a:{payload["audio_stream"]}','-vn','-ac','1','-ar','16000','-c:a','pcm_s16le',
+                         '-f','segment','-segment_time','600','-reset_timestamps','1','-y',str(directory/'chunk-%05d.wav')],job,timeout=1800)
+            result=json.loads(command([sys.executable,'-m','backend.ai_tasks',job['id']],job,timeout=10800))
+            if result.get('error'):raise ValueError(result['error'])
+            return True
         if job['kind'] in ('inspect_link','download_link'):
             result=link_executor(job['id']) if link_executor else json.loads(command([sys.executable,'-m','backend.link_tasks',job['id']],job,timeout=180 if job['kind']=='inspect_link' else 10800))
             finish_link(job,result)
@@ -147,11 +179,26 @@ def run_once(*, link_executor=None):
         with store.connect() as db:
             db.execute("UPDATE jobs SET state='failed',error=? WHERE id=? AND owner=? AND state='running'", (message[:250], job['id'], OWNER))
     finally:
+        stop.set();thread.join(timeout=1)
+        if job['kind']=='voice_sample':
+            path=(store.root()/'voice-staging'/job['id']).resolve()
+            if path.is_relative_to((store.root()/'voice-staging').resolve()) and path.exists():shutil.rmtree(path)
+        if job['kind']=='render':
+            path=(store.root()/'render-staging'/job['id']).resolve()
+            if path.is_relative_to((store.root()/'render-staging').resolve()) and path.exists():shutil.rmtree(path)
+        if job['kind']=='transcribe':
+            path=(store.root()/'ai-staging'/job['id']).resolve()
+            if path.is_relative_to((store.root()/'ai-staging').resolve()) and path.exists():shutil.rmtree(path)
         if job['kind']=='download_link':
             staging=(store.root()/'staging'/job['id']).resolve()
             if staging.is_relative_to((store.root()/'staging').resolve()) and staging.exists():
                 shutil.rmtree(staging)
     return True
+
+
+def db_metadata(asset_id):
+    with store.connect() as db:
+        return db.execute('SELECT metadata FROM assets WHERE id=?',(asset_id,)).fetchone()[0]
 
 
 def main():

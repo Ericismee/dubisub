@@ -25,9 +25,20 @@ def validate(cues):
             raise ValueError('Each cue needs 0 ≤ start < end ≤ 7 days')
         if len(c['text']) > 10000 or '\x00' in c['text']:
             raise ValueError('Invalid cue text')
+    if sum(len(c['text'].encode('utf-8')) for c in cues)>8*1024**2:
+        raise ValueError('Subtitle text exceeds 8 MiB')
 
 
 def export(cues, format_):
+    if format_=='ass':
+        subtitles=pysubs2.SSAFile()
+        for cue in cues:
+            # ASS has no portable literal-brace quoting across renderers. Use visible
+            # fullwidth braces and a zero-width word joiner after literal backslashes,
+            # so untrusted text cannot become an override tag or a \N instruction.
+            text=cue['text'].replace('\r\n','\n').replace('\r','\n').replace('\\','\\\u2060').replace('{','｛').replace('}','｝').replace('\n',r'\N')
+            subtitles.append(pysubs2.SSAEvent(start=cue['start_ms'],end=cue['end_ms'],text=text))
+        return subtitles.to_string('ass')
     # Write literal text ourselves: ASS braces and HTML never become instructions/styles.
     def clock(ms):
         h, rest = divmod(ms, 3600000)

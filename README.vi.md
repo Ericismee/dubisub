@@ -52,3 +52,9 @@ Tạo mẫu tự sinh: `.venv/Scripts/python scripts/make_sample.py` (ở `data/
 `.env.example` liệt kê biến môi trường; chưa tự nạp file `.env`. M1 không cần key. Cấu hình AI chỉ lưu endpoint/model/tên biến khóa và luôn báo chưa xác minh. Xem [trạng thái](docs/STATUS.md), [setup](docs/SETUP_AUDIT.md) và [đặc tả](PROJECT_BRIEF.vi.md).
 
 Dự án lưu dữ liệu cục bộ; nếu chọn AI từ xa, nội dung cần xử lý được gửi tới provider đã chọn. Mã nguồn, tài liệu và tài sản SVG nguyên gốc của DubiSub dùng [giấy phép MIT](LICENSE), bản quyền © 2026 ericismee. Thành phần bên thứ ba giữ giấy phép riêng. [English README](README.md).
+
+
+### Studio workflows (2026-10-18)
+ASR, multilingual subtitle translation/glossary, subtitle editing, cached voice samples and single-source MP4 export are available. Configure each provider separately in Settings. Translation supports Ollama native or OpenAI-compatible APIs; discover installed model tags after saving the endpoint. The 24-family Ollama catalog does not install models. Local Ollama example: `http://127.0.0.1:11434` (service must be running). No API key/model is bundled. Full dubbing, review generation and multitrack effects remain pending; see docs/STATUS.md for evidence and limitations.
+
+Run `uv sync --locked`, `npm ci --prefix frontend`, then `powershell -ExecutionPolicy Bypass -File scripts/start.ps1`; open http://127.0.0.1:3600/. Use the matching stop.ps1 to stop only this launcher.

@@ -97,8 +97,11 @@ def inspect_source(url, client=None):
         if not formats and not subtitles:
             raise ValueError('YouTube không cung cấp file tải trực tiếp được hỗ trợ cho video này.')
         return {'title':str(info.get('title') or 'YouTube video')[:300], 'duration':info.get('duration'), 'source':'youtube',
-                'source_url':canonical,'formats':formats[:100], 'subtitles':subtitles[:200]}
-    with client.open(url, method='HEAD') as response:
+                'source_url':canonical,'formats':formats[:100], 'subtitles':subtitles[:200], 'thumbnail_url':info.get('thumbnail')}
+    response=client.open(url,method='HEAD')
+    if response.status in (405,501):
+        response.close();response=client.open(url,headers={'Range':'bytes=0-0'})
+    with response:
         if response.status>=400:
             raise ValueError('Nguồn không hỗ trợ đọc thông tin file (HEAD) hoặc từ chối truy cập.')
         ext=PurePosixPath(urlsplit(response.url).path).suffix.lower().lstrip('.')
@@ -107,6 +110,8 @@ def inspect_source(url, client=None):
             raise ValueError('Nguồn này chưa được hỗ trợ. Dùng link YouTube hoặc link file video/audio/SRT/VTT/ASS trực tiếp.')
         length=response.headers.get('Content-Length')
         size=int(length) if length and length.isdigit() else None
+        content_range=response.headers.get('Content-Range','')
+        if response.status==206 and re.fullmatch(r'bytes \d+-\d+/\d+',content_range):size=int(content_range.rsplit('/',1)[1])
         title=PurePosixPath(urlsplit(response.url).path).name[:300] or 'Media từ liên kết'
         if ext in ('srt','vtt','ass'):
             return {'title':title,'duration':None,'source':'direct','source_url':redact(url),'formats':[],
@@ -119,6 +124,7 @@ def inspect_source(url, client=None):
 def public_info(info):
     # Never expose signed stream URLs or extractor headers/cookies to browser/logs.
     result={k:info.get(k) for k in ('title','duration','source','source_url')}
+    result['has_thumbnail']=bool(info.get('has_thumbnail'))
     result['formats']=[{k:f.get(k) for k in ('format_id','ext','height','filesize','filesize_approx','vcodec','acodec','language')} for f in info.get('formats',[])]
     result['subtitles']=[{k:s[k] for k in ('id','language','automatic','ext')} for s in info.get('subtitles',[])]
     return result

@@ -23,6 +23,10 @@ async def lifespan(app):
 
 
 app = FastAPI(title='DubiSub', lifespan=lifespan)
+from .workflows import router as workflow_router
+app.include_router(workflow_router)
+from .voices import router as voices_router
+app.include_router(voices_router)
 
 
 @app.middleware('http')
@@ -95,6 +99,7 @@ def health():
 
 class ProviderConfig(BaseModel):
     kind: Literal['asr', 'translation', 'tts']
+    protocol: Literal['openai', 'ollama'] = 'openai'
     endpoint: str = Field(max_length=2048)
     model: str = Field(default='', max_length=160)
     key_env: str = Field(default='', pattern=r'^(DUBISUB_[A-Z0-9_]{1,80})?$')
@@ -114,6 +119,8 @@ class SettingsEdit(BaseModel):
 
 @app.put('/api/settings')
 def update_settings(body: SettingsEdit):
+    if any(p.protocol=='ollama' and p.kind!='translation' for p in body.providers):
+        raise HTTPException(422, 'Ollama protocol supports translation only')
     if len({p.kind for p in body.providers}) != len(body.providers):
         raise HTTPException(422, 'Only one configuration per provider kind')
     with store.connect() as db:
@@ -135,9 +142,9 @@ def settings():
 
 
 @app.get('/api/projects')
-def projects():
+def projects(deleted:bool=False):
     with store.connect() as db:
-        rows = db.execute("SELECT document FROM projects WHERE COALESCE(json_extract(document,'$.deleted'),0)=0 ORDER BY rowid DESC LIMIT 100").fetchall()
+        rows = db.execute("SELECT document FROM projects WHERE COALESCE(json_extract(document,'$.deleted'),0)=? ORDER BY rowid DESC LIMIT 100",(int(deleted),)).fetchall()
     return [{k:v for k,v in json.loads(r[0]).items() if k != 'tracks'} for r in rows]
 
 
@@ -196,8 +203,13 @@ def restore_project(project_id: str):
 def read(project_id: str):
     with store.connect() as db:
         document = store.project(db, project_id)
+        from .ai_tasks import fingerprint
+        for track in document['tracks']:
+            if track.get('source_track_id'):
+                source=next((t for t in document['tracks'] if t['id']==track['source_track_id']),None)
+                track['source_changed']=not source or fingerprint(source['cues'])!=track.get('source_hash')
         document['assets'] = [dict(r) for r in db.execute(
-            "SELECT id,filename,kind,checksum,metadata FROM assets WHERE project_id=? AND kind!='remote'", (project_id,))]
+            "SELECT id,filename,kind,checksum,metadata FROM assets WHERE project_id=? AND kind NOT IN ('remote','generated')", (project_id,))]
         document['jobs'] = [dict(r) for r in db.execute(
             'SELECT id,asset_id,kind,state,attempts,progress,error FROM jobs WHERE project_id=?', (project_id,))]
         document['links'] = [dict(r) for r in db.execute('SELECT link_imports.id,assets.filename FROM link_imports JOIN assets ON assets.id=link_imports.id WHERE assets.project_id=?',(project_id,))]
@@ -239,8 +251,23 @@ def link_info(link_id: str):
         row=db.execute('SELECT link_imports.*,assets.project_id FROM link_imports JOIN assets ON assets.id=link_imports.id WHERE link_imports.id=?',(link_id,)).fetchone()
         if not row:raise KeyError(link_id)
         store.project(db,row['project_id'])
-        jobs=[dict(r) for r in db.execute('SELECT id,kind,state,progress,error,attempts FROM jobs WHERE asset_id=? ORDER BY rowid DESC',(link_id,))]
+        jobs=[dict(r) for r in db.execute('SELECT id,kind,state,progress,error,attempts,checkpoint FROM jobs WHERE asset_id=? ORDER BY rowid DESC',(link_id,))]
+    for job in jobs:
+        raw=job.pop('checkpoint')
+        try:status=json.loads(raw) if raw and job['kind']=='download_link' else {}
+        except ValueError:status={}
+        job['transfer']={k:status[k] for k in ('downloaded_bytes','total_bytes','file_index','file_count','bytes_per_second') if k in status} if isinstance(status,dict) else {}
     return {'id':link_id,'info':public_info(json.loads(row['inspection'])) if row['inspection'] else None,'jobs':jobs}
+
+
+@app.get('/api/links/{link_id}/thumbnail')
+def thumbnail(link_id:str):
+    link_info(link_id)
+    path=store.root()/'link-thumbnails'/link_id
+    if not path.is_file():raise KeyError(link_id)
+    with path.open('rb') as f:header=f.read(12)
+    mime='image/png' if header.startswith(b'\x89PNG') else 'image/webp' if header.startswith(b'RIFF') else 'image/jpeg'
+    return FileResponse(path,media_type=mime,headers={'X-Content-Type-Options':'nosniff'})
 
 
 @app.post('/api/links/{link_id}/download',status_code=202)
@@ -317,12 +344,13 @@ def edit(project_id: str, track_id: str, body: EditTrack):
         if track is None:
             raise KeyError(track_id)
         track['cues'] = cues
+        track['reviewed'] = False
         store.save(db, doc)
     return doc
 
 
 @app.get('/api/projects/{project_id}/tracks/{track_id}/export')
-def download(project_id: str, track_id: str, format: Literal['srt', 'vtt'] = 'srt'):
+def download(project_id: str, track_id: str, format: Literal['srt', 'vtt', 'ass'] = 'srt'):
     with store.connect() as db:
         doc = store.project(db, project_id)
     track = next((t for t in doc['tracks'] if t['id'] == track_id), None)
@@ -359,3 +387,13 @@ def control(job_id: str, action: Literal['cancel', 'retry']):
         if not result.rowcount:
             raise HTTPException(409, 'Job missing, not eligible, or retry limit reached')
     return {'status': action}
+
+
+@app.get('/api/projects/{project_id}/artifacts/{artifact_id}')
+def artifact(project_id:str,artifact_id:str):
+    with store.connect() as db:doc=store.project(db,project_id)
+    item=next((a for a in doc.get('artifacts',[]) if a['id']==artifact_id),None)
+    if not item:raise KeyError(artifact_id)
+    path=store.root()/'artifacts'/f'{item["job_id"]}.mp4'
+    if not path.is_file():raise KeyError(artifact_id)
+    return FileResponse(path,media_type='video/mp4',filename=item['filename'])

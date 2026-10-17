@@ -123,3 +123,9 @@ DubiSub original project code, documentation, and original SVG brand assets are 
 Default dark studio, persistent light/dark and cursor choices, grouped settings (Appearance/ASR/Translation/TTS/Storage), project metadata edit and recoverable deletion are available. Delete cancels work and hides the project; it preserves original files. Use Restore to undo.
 
 Paste a YouTube or direct media/subtitle URL in the media library, analyze it, select content and import. DubiSub downloads into its own local store; no manual download/upload is needed. A public short YouTube sample completed inspect/download/merge/probe. Some videos require unsupported verification; playlists/live/DRM/authenticated sources, generic web pages, manifest streams and JS challenges remain unsupported. Direct-file servers must accept HEAD. See STATUS for exact test coverage and limitations. AI settings still store configuration only.
+
+
+### Studio workflows (2026-10-18)
+ASR, multilingual subtitle translation/glossary, subtitle editing, cached voice samples and single-source MP4 export are available. Configure each provider separately in Settings. Translation supports Ollama native or OpenAI-compatible APIs; discover installed model tags after saving the endpoint. The 24-family Ollama catalog does not install models. Local Ollama example: `http://127.0.0.1:11434` (service must be running). No API key/model is bundled. Full dubbing, review generation and multitrack effects remain pending; see docs/STATUS.md for evidence and limitations.
+
+Run `uv sync --locked`, `npm ci --prefix frontend`, then `powershell -ExecutionPolicy Bypass -File scripts/start.ps1`; open http://127.0.0.1:3600/. Use the matching stop.ps1 to stop only this launcher.
