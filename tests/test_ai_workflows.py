@@ -219,3 +219,26 @@ def test_wrong_asr_model_blocked_before_network():
     from backend.providers import request,ProviderError
     with pytest.raises(ProviderError,match='faster-whisper'):
         request({'endpoint':'http://127.0.0.1:1','model':'nomic-embed-text:latest'},'audio/transcriptions',files={})
+
+
+def test_translation_uses_nearby_visual_context_and_short_ids(provider):
+    client,state,_=provider;p=source(client,3);pid=p['id'];source_track=p['tracks'][0]
+    scenes={'id':'scene-test','kind':'scenes','scope':'frame_sampling','items':[
+      {'text':'A job interview in an office','source_ranges':[{'start_ms':1000,'end_ms':1001,'type':'image'}]},
+      {'text':'Unrelated far-away scene','source_ranges':[{'start_ms':100000,'end_ms':100001,'type':'image'}]}]}
+    with store.connect() as db:
+        doc=store.project(db,pid);doc['analyses']={'scene-test':scenes};store.save(db,doc)
+    p=client.get('/api/projects/'+pid).json()
+    r=client.post(f'/api/projects/{pid}/translate',json={'revision':p['revision'],'track_id':source_track['id'],'target_languages':['vi'],'cue_ids':[source_track['cues'][1]['id']],'scene_analysis_id':'scene-test','context_note':'Use consistent character names.'})
+    assert r.status_code==202,r.text
+    worker.run_once();p=client.get('/api/projects/'+pid).json();translated=p['tracks'][-1]
+    prompt=state['requests'][-1]
+    assert prompt['cues'][0]['id']=='C1'
+    assert len(prompt['context_before'])==1 and len(prompt['context_after'])==1
+    assert [v['observation'] for v in prompt['visual_context']]==['A job interview in an office']
+    assert translated['cues'][0]['id']==source_track['cues'][1]['id']
+    assert translated['translation_context']['scope']=='dialogue_and_sampled_frames'
+    with store.connect() as db:
+        doc=store.project(db,pid);doc['analyses']['scene-test']['items'][0]['text']='Corrected scene';store.save(db,doc)
+    p=client.get('/api/projects/'+pid).json();assert p['tracks'][-1]['source_changed']
+    assert client.put(f"/api/projects/{pid}/tracks/{translated['id']}/review",json={'revision':p['revision'],'reviewed':True}).status_code==409

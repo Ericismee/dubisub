@@ -219,6 +219,8 @@ def main():
                     page.locator('.artifact-list a').click()
                 assert Path(rendered.value.path()).stat().st_size>100
                 page.get_by_label('Ngôn ngữ dịch đích',exact=True).fill('vi, en')
+                page.get_by_label('Ngữ cảnh bản dịch',exact=True).fill('Hai đồng nghiệp trò chuyện, giữ cách xưng hô nhất quán.')
+                page.get_by_label('Cảnh hỗ trợ bản dịch',exact=True).select_option('')
                 page.get_by_role('button',name='Dịch bản phụ đề đang chọn',exact=True).click()
                 expect(page.locator('.track-select option')).to_have_count(3,timeout=20000)
                 english=page.locator('.track-select option').filter(has_text='· Tiếng Anh ·').get_attribute('value')

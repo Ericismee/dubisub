@@ -31,6 +31,7 @@ async function api<T>(path:string, options?:RequestInit):Promise<T> {
 const json = (value:unknown) => ({headers:{'Content-Type':'application/json'},body:JSON.stringify(value)});
 
 function App(){
+  const [translationContext,setTranslationContext]=useState({scene:'',note:''});
   const [libraryOpen,setLibraryOpen]=useState(false),[autoOpen,setAutoOpen]=useState(false),[presetVietnamese,setPresetVietnamese]=useState(false),[settingsTab,setSettingsTab]=useState('appearance');
   const [theme,setTheme]=useState<Theme>(()=>{try{return localStorage.getItem('dubisub.ui.v1.theme')==='light'?'light':'dark';}catch{return 'dark';}});
   const [customCursor,setCustomCursor]=useState(()=>{try{return localStorage.getItem('dubisub.ui.v1.cursor')!=='system';}catch{return true;}});
@@ -90,7 +91,7 @@ function App(){
   function redo(){if(!future.length)return;setHistory(h=>[...h,cues]);setCues(future[future.length-1]);setFuture(f=>f.slice(0,-1));generation.current++;setDirty(true);}
   async function translateCue(cueId?:string){
     if(!project||dirty||busy)return;
-    setBusy(true);try{await api(`/api/projects/${project.id}/translate`,{method:'POST',...json({revision:project.revision,track_id:trackId,target_languages:[project.target_language||'vi'],...(cueId?{cue_ids:[cueId]}:{})})});setStatus('Đã xếp lịch dịch sang '+(project.target_language||'vi')+'. Kết quả nằm trong bản phụ đề mới; nguồn giữ nguyên.');await refreshWorkflow();}catch(e){setError(String(e));}finally{setBusy(false);}
+    setBusy(true);try{await api(`/api/projects/${project.id}/translate`,{method:'POST',...json({revision:project.revision,track_id:trackId,scene_analysis_id:translationContext.scene||null,context_note:translationContext.note,target_languages:[project.target_language||'vi'],...(cueId?{cue_ids:[cueId]}:{})})});setStatus('Đã xếp lịch dịch sang '+(project.target_language||'vi')+'. Kết quả nằm trong bản phụ đề mới; nguồn giữ nguyên.');await refreshWorkflow();}catch(e){setError(String(e));}finally{setBusy(false);}
   }
   async function archiveTrack(restore=false){
     if(!project||dirty||busy)return;
@@ -103,7 +104,15 @@ function App(){
       let destination=project;
       if(!destination){destination=await api<Project>('/api/projects',{method:'POST',...json({name:file.name.replace(/\.[^.]+$/,''),mode,target_language:target})});await refreshLibrary();}
       const body=new FormData();body.append('file',file);body.append('kind',kind);
-      await api(`/api/projects/${destination.id}/upload`,{method:'POST',body});
+      await new Promise<void>((resolve,reject)=>{
+        const xhr=new XMLHttpRequest(),started=performance.now();
+        xhr.open('POST',`/api/projects/${destination!.id}/upload`);xhr.timeout=3600000;
+        xhr.upload.onprogress=e=>{const seconds=Math.max(.1,(performance.now()-started)/1000);setStatus(e.lengthComputable&&e.loaded===e.total?'Đã truyền file · máy chủ đang ghi và kiểm tra…':`Đang nhập ${e.lengthComputable?Math.round(e.loaded/e.total*100)+'%':''} · ${(e.loaded/1024**2).toFixed(1)} MB · ${(e.loaded/1024**2/seconds).toFixed(1)} MB/s`);};
+        xhr.onload=()=>{if(xhr.status>=200&&xhr.status<300)resolve();else void httpError(new Response(xhr.responseText,{status:xhr.status||500})).then(reject,reject);};
+        xhr.onerror=()=>reject(new Error('Mất kết nối khi nhập file. Kiểm tra kho media trước khi tải lại để tránh nhập trùng.'));
+        xhr.ontimeout=()=>reject(new Error('Hết thời gian nhập file. Kiểm tra kết nối và dung lượng trống.'));
+        xhr.send(body);
+      });
       load(await api<Project>('/api/projects/'+destination.id));setShowCreate(false);
       setStatus(kind==='media'?'Đã nhập, đang chờ worker kiểm tra':'Đã nhập phụ đề');
     }catch(e){setError(String(e));}finally{setBusy(false);}
@@ -175,7 +184,7 @@ function App(){
       <div className="inspector-guide"><strong>Công cụ xử lý</strong><small>1. Transcript → 2. Dịch → 3. Giọng → 4. Xuất</small><button onClick={()=>setAutoOpen(true)}>Mở hướng dẫn Auto</button><nav className="workspace-tabs" aria-label="Các vùng studio">{[{id:'source',label:'Transcript gốc'},{id:'translation',label:'Bản dịch'},{id:'analysis',label:'Phân tích cảnh'},{id:'script',label:'Tóm tắt/kịch bản'},{id:'voice',label:'Giọng & nhân vật'},{id:'timeline',label:'Timeline'},{id:'export',label:'Xuất'}].map(v=><button key={v.id} disabled={dirty||busy} onClick={()=>workspace(v.id)}>{v.label}</button>)}</nav></div>
       {tool==='review'||Object.keys(project?.analyses||{}).length?<AnalysisPanel projectId={project?.id} revision={project?.revision||0} analyses={project?.analyses||{}} locked={dirty||busy} onSeek={seekSource} onRefresh={refreshWorkflow}/>:null}
       {tool!=='media'&&tool!=='subtitles'&&tool!=='export'&&tool!=='translation'&&tool!=='voice'&&tool!=='review'?<ToolInfo tool={tool} onConfigure={configure}/>:null}
-      <WorkflowPanel projectId={project?.id} revision={project?.revision||0} target={project?.target_language||target} trackId={trackId} tracks={project?.tracks||[]} assetId={media?.id} audioStreams={mediaMeta?.streams?.filter((s:{codec_type:string})=>s.codec_type==='audio')||[]} glossary={project?.glossary||{}} locked={dirty||busy} onRefresh={refreshWorkflow} onConfigure={configure} onAuto={()=>{setPresetVietnamese(true);setAutoOpen(true);}}/>
+      <WorkflowPanel onVoice={()=>workspace('voice')} onContextChange={(scene,note)=>setTranslationContext({scene,note})} analyses={project?.analyses} projectId={project?.id} revision={project?.revision||0} target={project?.target_language||target} trackId={trackId} tracks={project?.tracks||[]} assetId={media?.id} audioStreams={mediaMeta?.streams?.filter((s:{codec_type:string})=>s.codec_type==='audio')||[]} glossary={project?.glossary||{}} locked={dirty||busy} onRefresh={refreshWorkflow} onConfigure={configure} onAuto={()=>{setPresetVietnamese(true);setAutoOpen(true);}}/>
       {tool==='voice'?<DubbingPanel analyses={project?.analyses||{}} projectId={project?.id} revision={project?.revision||0} assetId={media?.id} duration={duration} trackId={trackId} cues={cues} profiles={project?.voice_profiles||{}} dubbings={project?.dubbings||[]} savedSettings={project?.narration_settings?.[trackId]} locked={dirty||busy} onRefresh={refreshWorkflow} onEdit={change}/>:null}
       {tool==='voice'?<VoicePanel projectId={project?.id} samples={project?.voice_samples||{}} jobs={project?.jobs||[]} locked={dirty||busy} onRefresh={refreshWorkflow} onConfigure={configure}/>:null}
       <section className="editor">{project?.archived_tracks?.length?<button disabled={dirty||busy} onClick={()=>void archiveTrack(true)}>Khôi phục bản phụ đề vừa xóa</button>:null}<div className="panel-heading"><h2>{selected?.kind==='review'?'Phụ đề review':selected?.kind==='translation'?'Bản dịch':'Phụ đề nguồn'}</h2><span className="count">{cues.length} câu</span></div><button className="new-track" disabled={!project||dirty||busy} onClick={async()=>{if(!project)return;try{const result=await api<{project:Project;track_id:string}>(`/api/projects/${project.id}/tracks`,{method:'POST',...json({revision:project.revision,language:'und'})});setProject({...project,...result.project});setTrackId(result.track_id);setCues([]);setHistory([]);setFuture([]);}catch(e){setError(String(e));}}}>Tạo bản phụ đề trống</button><label className="file subtitle-upload"><Icon name="plus" size={16}/><span>Nhập SRT / VTT / ASS</span>{uploadInput('subtitle')}</label>

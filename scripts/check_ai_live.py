@@ -63,5 +63,16 @@ def main():
             (out/'ollama-vision-summary-live.json').write_text(json.dumps(p['analyses'],ensure_ascii=False,indent=2),encoding='utf-8')
             print('PASS: actual sampled frame + transcript → evidence-linked summary draft',flush=True)
             print(json.dumps({a['kind']:{'scope':a['scope'],'items':len(a['items'])} for a in p['analyses'].values()}),flush=True)
+            p=run(asset_id=aid,mode='translate',use_vision=True,output='video')
+            target=p['tracks'][-1]
+            assert target['translation_context']['scope']=='dialogue_and_sampled_frames'
+            assert target['translation_context']['scene_analysis_id'] in p['analyses']
+            assert [c['id'] for c in target['cues']]==[c['id'] for c in p['tracks'][0]['cues']]
+            artifact=p['artifacts'][-1]
+            r=client.get(f"/api/projects/{pid}/artifacts/{artifact['id']}");assert r.status_code==200
+            (out/'contextual-translation-live.mp4').write_bytes(r.content)
+            (out/'contextual-translation-live.json').write_text(json.dumps(target,ensure_ascii=False,indent=2),encoding='utf-8')
+            print('PASS: actual LLaVA sampled scenes → contextual Qwen translation → complete subtitle MP4',flush=True)
+
 
 if __name__=='__main__':main()

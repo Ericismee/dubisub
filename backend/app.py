@@ -235,7 +235,8 @@ def read(project_id: str):
         for track in document['tracks']:
             if track.get('source_track_id'):
                 source=next((t for t in document['tracks'] if t['id']==track['source_track_id']),None)
-                track['source_changed']=not source or fingerprint(source['cues'])!=track.get('source_hash')
+                from .ai_tasks import context_current
+                track['source_changed']=not source or fingerprint(source['cues'])!=track.get('source_hash') or not context_current(document,track)
         from .analysis import source_current
         for analysis in document.get('analyses',{}).values():analysis['source_changed']=not source_current(document,analysis)
         document['assets'] = [dict(r) for r in db.execute(
@@ -347,15 +348,17 @@ async def upload(project_id: str, file: UploadFile = File(), kind: Literal['medi
     digest = hashlib.sha256()
     try:
         with path.open('xb') as output:
-            while chunk := await file.read(1024 * 1024):
+            while chunk := await file.read(4 * 1024 * 1024):
                 size += len(chunk)
                 if size > cap or shutil.disk_usage(directory).free < len(chunk) + 64 * 1024**2:
                     raise HTTPException(413, 'Upload limit or free disk reserve exceeded')
-                digest.update(chunk)
-                await run_in_threadpool(output.write, chunk)
+                def write_chunk():
+                    digest.update(chunk)
+                    output.write(chunk)
+                await run_in_threadpool(write_chunk)
         if not size:
             raise HTTPException(422, 'Empty file')
-        cues = await run_in_threadpool(parse, path.read_text(encoding='utf-8-sig'), extension) if kind == 'subtitle' else None
+        cues = await run_in_threadpool(lambda: parse(path.read_text(encoding='utf-8-sig'), extension)) if kind == 'subtitle' else None
         with store.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             doc = store.project(db, project_id)

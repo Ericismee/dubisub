@@ -34,6 +34,8 @@ class Translate(BaseModel):
     target_languages: list[str] = Field(min_length=1,max_length=8)
     revision: int
     cue_ids: list[str] | None = Field(default=None,min_length=1,max_length=5000)
+    scene_analysis_id:str|None=None
+    context_note:str=Field(default='',max_length=1200)
 
     @field_validator('target_languages')
     @classmethod
@@ -143,9 +145,9 @@ def render(project_id:str,body:Render):
         if body.burn_subtitles and track.get('kind') in ('translation','asr') and not track.get('reviewed'):
             raise HTTPException(422,'Hãy duyệt track ASR/bản dịch trước khi gắn vào video.')
         if body.burn_subtitles and track.get('kind')=='translation':
-            from .ai_tasks import fingerprint
+            from .ai_tasks import fingerprint,context_current
             source=next((t for t in doc['tracks'] if t['id']==track.get('source_track_id')),None)
-            if not source or fingerprint(source['cues'])!=track.get('source_hash'):
+            if not source or fingerprint(source['cues'])!=track.get('source_hash') or not context_current(doc,track):
                 raise HTTPException(422,'Phụ đề nguồn đã thay đổi; dịch và duyệt lại trước khi xuất.')
         jid=store.uid();payload={'plan':plan,'burn_subtitles':body.burn_subtitles,'cues':track['cues'] if track else [],'track_id':body.track_id,'source_revision':doc['revision']}
         db.execute("INSERT INTO jobs(id,project_id,asset_id,kind,payload) VALUES(?,?,?,'render',?)",(jid,project_id,body.asset_id,json.dumps(payload)))
@@ -191,12 +193,17 @@ def translate(project_id:str,body:Translate):
         if not source or not source['cues']:raise HTTPException(422,'Chọn một track phụ đề có nội dung.')
         if body.cue_ids is not None and (len(set(body.cue_ids))!=len(body.cue_ids) or not set(body.cue_ids)<= {c['id'] for c in source['cues']}):raise HTTPException(422,'Danh sách câu cần dịch không hợp lệ.')
         if source.get('kind') in ('review','description'):raise HTTPException(422,'Luồng dịch lời thoại không nhận track review/caption AI. Dịch kịch bản cần giữ loại nội dung và timeline riêng.')
+        scenes=None
+        if body.scene_analysis_id:
+            scenes=doc.get('analyses',{}).get(body.scene_analysis_id)
+            if not scenes or scenes.get('kind')!='scenes':raise HTTPException(422,'Chọn phân tích cảnh đã hoàn tất trong dự án này.')
         for language in body.target_languages:
             if language==source.get('language'):raise HTTPException(422,'Đích phải khác ngôn ngữ track nguồn.')
             existing=db.execute("SELECT id FROM jobs WHERE project_id=? AND kind='translate' AND state IN ('queued','running') AND json_extract(payload,'$.source.id')=? AND json_extract(payload,'$.target_language')=?",(project_id,source['id'],language)).fetchone()
             if existing:raise HTTPException(409,'Đang có tác vụ dịch cùng track và ngôn ngữ.')
             jid=store.uid();payload={'source':source,'target_language':language,'provider':provider,'glossary':doc.get('glossary',{})}
             if body.cue_ids is not None:payload['cue_ids']=body.cue_ids
+            payload.update(scenes=scenes,context_note=body.context_note)
             db.execute("INSERT INTO jobs(id,project_id,asset_id,kind,payload) VALUES(?,?,?,'translate',?)",(jid,project_id,source['asset_id'],json.dumps(payload)))
             jobs.append({'id':jid,'language':language})
     return {'jobs':jobs}
@@ -228,9 +235,9 @@ def review_track(project_id:str,track_id:str,body:Review):
         track=next((t for t in doc['tracks'] if t['id']==track_id),None)
         if not track:raise KeyError(track_id)
         if body.reviewed and track.get('source_track_id'):
-            from .ai_tasks import fingerprint
+            from .ai_tasks import fingerprint,context_current
             source=next((t for t in doc['tracks'] if t['id']==track['source_track_id']),None)
-            if not source or fingerprint(source['cues'])!=track.get('source_hash'):
+            if not source or fingerprint(source['cues'])!=track.get('source_hash') or not context_current(doc,track):
                 raise HTTPException(409,'Nguồn đã thay đổi; cần dịch lại trước khi duyệt.')
         track['reviewed']=body.reviewed;store.save(db,doc)
     return doc
