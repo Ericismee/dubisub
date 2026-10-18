@@ -55,6 +55,10 @@ def main():
                     stream=io.BytesIO()
                     with wave.open(stream,'wb') as w:w.setnchannels(1);w.setsampwidth(2);w.setframerate(16000);w.writeframes(b'\x00\x00'*32000)
                     content=stream.getvalue();self.send_response(200);self.send_header('Content-Type','audio/wav');self.send_header('Content-Length',str(len(content)));self.end_headers();self.wfile.write(content);return
+                if self.path=='/v1/audio/transcriptions':
+                    self.rfile.read(int(self.headers['Content-Length']))
+                    if stats.get('fail_asr'):self.send_error(500,'Controlled fixture failure');return
+                    self.json_response({'language':'en','segments':[{'start':0.1,'end':1.2,'text':'Permitted ASR protocol fixture'}]});return
                 if self.path!='/v1/chat/completions':self.send_error(404);return
                 body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 content=body['messages'][-1]['content']
@@ -102,6 +106,7 @@ def main():
                 page.get_by_role('button',name='Cài đặt studio',exact=True).click()
                 settings=page.get_by_role('dialog',name='Cài đặt',exact=True)
                 expect(settings).to_be_visible()
+                assert settings.bounding_box()['width']>1050
                 settings.get_by_label('Sáng',exact=False).check()
                 assert page.evaluate('document.documentElement.dataset.theme')=='light'
                 settings.get_by_label('Tối',exact=False).check()
@@ -113,6 +118,14 @@ def main():
                 settings.get_by_label('Đồng ý gửi prompt/ảnh tổng hợp',exact=False).check()
                 settings.get_by_role('button',name='Kiểm tra text',exact=True).click()
                 expect(settings.locator('.capability-status .verified').filter(has_text='text:')).to_be_visible(timeout=20000)
+                settings.get_by_role('navigation',name='Nhóm cấu hình').get_by_role('button',name='Nhận dạng giọng nói',exact=True).click()
+                settings.get_by_label('Engine ASR',exact=True).select_option('faster_whisper')
+                expect(settings.get_by_label('Endpoint API',exact=True)).to_have_count(0)
+                settings.get_by_label('Engine ASR',exact=True).select_option('openai')
+                settings.get_by_label('Endpoint API',exact=True).fill(f'http://127.0.0.1:{fixture.server_port}/v1')
+                settings.get_by_label('Model',exact=True).fill('fixture-whisper')
+                settings.get_by_role('button',name='Lưu cấu hình',exact=True).click()
+                page.wait_for_function("fetch('/api/settings').then(r=>r.json()).then(s=>s.providers.some(p=>p.kind==='asr'&&p.model==='fixture-whisper'))")
                 settings.get_by_role('navigation',name='Nhóm cấu hình').get_by_role('button',name='Giọng đọc',exact=True).click()
                 settings.get_by_label('Endpoint API',exact=True).fill(f'http://127.0.0.1:{fixture.server_port}/v1')
                 settings.get_by_label('Model',exact=True).fill('vieneu-v3-turbo')
@@ -320,6 +333,44 @@ def main():
                 page.get_by_label('Track phụ đề',exact=True).select_option(first)
                 page.get_by_role('navigation',name='Công cụ studio').get_by_role('button',name='Phụ đề',exact=True).click()
 
+                page.locator('.workflow-panel summary').filter(has_text='Phụ đề tiếng Việt tự động').click()
+                page.get_by_label('Nhận dạng lại video và chèn phụ đề tiếng Việt',exact=False).check()
+                page.get_by_role('button',name='Thiết lập phụ đề Việt',exact=True).click()
+                auto=page.get_by_role('dialog',name='Xử lý video tự động',exact=True)
+                auto.get_by_role('button',name='6. Đầu ra',exact=True).click()
+                expect(auto.get_by_label('Đầu ra Auto',exact=True)).to_have_value('video')
+                auto.get_by_label('Làm mờ vùng phụ đề cũ',exact=False).check()
+                auto.get_by_role('button',name='7. Xem & chạy',exact=True).click()
+                auto.get_by_role('button',name='Lập kế hoạch Auto',exact=True).click()
+                auto.get_by_label('Tôi xác nhận nguồn, pipeline',exact=False).check()
+                auto.get_by_role('button',name='Chạy Auto',exact=True).click()
+                expect(auto.locator('.auto-runs a').filter(has_text='MP4 ·')).to_have_count(1,timeout=35000)
+                auto.get_by_role('button',name='Đóng Auto',exact=True).click()
+                expect(page.get_by_label('Track phụ đề',exact=True).locator('option:checked')).to_contain_text('· vi ·')
+                expect(page.locator('.subtitle-mask-preview')).to_be_visible()
+                page.get_by_label('Hiện phụ đề',exact=True).uncheck()
+                assert page.locator('video').evaluate('(v)=>v.textTracks[0].mode')=='hidden'
+                expect(page.locator('.subtitle-overlay')).to_be_hidden()
+                page.get_by_label('Hiện phụ đề',exact=True).check()
+                page.get_by_label('Track phụ đề',exact=True).select_option(first)
+                stats['fail_asr']=True
+                page.get_by_role('button',name='Nhận dạng lời thoại',exact=True).click()
+                failed_asr=page.locator('.jobs>div').filter(has_text='Nhận dạng lời thoại').filter(has_text='failed')
+                expect(failed_asr).to_have_count(1,timeout=15000)
+                expect(failed_asr.locator('small').first).to_contain_text('lượt 1/3')
+                for attempt in (2,3):
+                    failed_asr.get_by_role('button',name='Thử lại',exact=True).click()
+                    expect(failed_asr.locator('small').first).to_contain_text(f'lượt {attempt}/3',timeout=15000)
+                    if attempt==2:
+                        expect(failed_asr.get_by_role('button',name='Thử lại',exact=True)).to_be_visible(timeout=15000)
+                    else:
+                        expect(failed_asr.get_by_text('Đã hết 3 lần thử',exact=False)).to_be_visible(timeout=15000)
+                expect(failed_asr.get_by_role('button',name='Thử lại',exact=True)).to_have_count(0)
+                stats['fail_asr']=False
+                page.once('dialog',lambda dialog:dialog.accept())
+                failed_asr.get_by_role('button',name='Tạo lượt mới',exact=True).click()
+                expect(page.locator('.jobs>div').filter(has_text='Nhận dạng lời thoại').filter(has_text='succeeded')).to_have_count(2,timeout=20000)
+                expect(page.locator('.error-toast')).to_have_count(0)
                 page.get_by_label('Câu 1',exact=True).focus()
                 page.keyboard.press('Tab')
                 assert page.evaluate('document.activeElement !== document.body')

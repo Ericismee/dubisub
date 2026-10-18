@@ -35,6 +35,8 @@ from .pipelines import router as pipeline_router
 app.include_router(pipeline_router)
 from .analysis import router as analysis_router
 app.include_router(analysis_router)
+from .job_restarts import router as restart_router
+app.include_router(restart_router)
 
 
 @app.middleware('http')
@@ -107,7 +109,7 @@ def health():
 
 class ProviderConfig(BaseModel):
     kind: Literal['asr', 'translation', 'vision', 'tts']
-    protocol: Literal['openai', 'ollama'] = 'openai'
+    protocol: Literal['openai', 'ollama','faster_whisper'] = 'openai'
     endpoint: str = Field(max_length=2048)
     model: str = Field(default='', max_length=160)
     key_env: str = Field(default='', pattern=r'^(DUBISUB_[A-Z0-9_]{1,80})?$')
@@ -127,6 +129,7 @@ class SettingsEdit(BaseModel):
 
 @app.put('/api/settings')
 def update_settings(body: SettingsEdit):
+    if any(p.protocol=='faster_whisper' and (p.kind!='asr' or p.model not in ('tiny','small') or p.key_env) for p in body.providers):raise HTTPException(422,'faster-whisper local chỉ dùng ASR tiny/small, không cần API key.')
     if any(p.protocol=='ollama' and p.kind not in ('translation','vision') for p in body.providers):
         raise HTTPException(422, 'Ollama supports LLM/vision roles only')
     if len({p.kind for p in body.providers}) != len(body.providers):
@@ -144,6 +147,8 @@ def settings():
     providers = json.loads(row[0]) if row else []
     from .providers import DEFAULT_TTS
     if not any(p['kind']=='tts' for p in providers):providers.append(dict(DEFAULT_TTS))
+    from .local_asr import DEFAULT,ready
+    if not any(p['kind']=='asr' for p in providers) and ready(DEFAULT['model']):providers.append(dict(DEFAULT))
     providers = [dict(**p, verified=False, capabilities=[], key_present=bool(p['key_env'] and os.getenv(p['key_env']))) for p in providers]
     return {'max_upload_mb': int(os.getenv('DUBISUB_MAX_UPLOAD_MB', '2048')),
             'providers': providers, 'ai_status': 'unverified' if providers else 'not_configured',
@@ -236,7 +241,18 @@ def read(project_id: str):
         document['assets'] = [dict(r) for r in db.execute(
             "SELECT id,filename,kind,checksum,metadata FROM assets WHERE project_id=? AND kind NOT IN ('remote','generated')", (project_id,))]
         document['jobs'] = [dict(r) for r in db.execute(
-            'SELECT id,asset_id,kind,state,attempts,progress,error FROM jobs WHERE project_id=?', (project_id,))]
+            'SELECT id,asset_id,kind,state,attempts,progress,error,payload FROM jobs WHERE project_id=?', (project_id,))]
+        current_providers={}
+        for job in document['jobs']:
+            payload=json.loads(job.pop('payload'));job['can_retry']=job['state'] in ('failed','canceled') and job['attempts']<3
+            if job['state'] in ('failed','canceled') and job['kind'] in ('transcribe','translate'):
+                from .providers import configured,ProviderError
+                role='asr' if job['kind']=='transcribe' else 'translation'
+                if role not in current_providers:
+                    try:current_providers[role]=configured(role)
+                    except ProviderError:current_providers[role]=None
+                if fingerprint(current_providers[role])!=fingerprint(payload.get('provider')):
+                    job['can_retry']=False;job['retry_reason']='provider_changed'
         document['links'] = [dict(r) for r in db.execute('SELECT link_imports.id,assets.filename FROM link_imports JOIN assets ON assets.id=link_imports.id WHERE assets.project_id=?',(project_id,))]
     return document
 
@@ -403,15 +419,23 @@ def media(project_id: str, asset_id: str):
 @app.post('/api/jobs/{job_id}/{action}')
 def control(job_id: str, action: Literal['cancel', 'retry']):
     with store.connect() as db:
-        row=db.execute('SELECT project_id FROM jobs WHERE id=?',(job_id,)).fetchone()
+        db.execute('BEGIN IMMEDIATE')
+        row=db.execute('SELECT * FROM jobs WHERE id=?',(job_id,)).fetchone()
         if not row:raise KeyError(job_id)
         store.project(db,row['project_id'])
+        if action=='cancel' and row['state'] in ('canceled','succeeded','failed'):return {'status':row['state']}
+        if action=='retry' and row['state'] in ('queued','running'):return {'status':row['state']}
+        if action=='retry' and row['attempts']>=3:raise HTTPException(409,'Tác vụ đã hết 3 lần thử. Sửa cấu hình rồi tạo tác vụ mới; kết quả/checkpoint cũ vẫn được giữ.')
+        if action=='retry' and row['kind'] in ('transcribe','translate'):
+            from .providers import configured
+            from .ai_tasks import fingerprint
+            if fingerprint(configured('asr' if row['kind']=='transcribe' else 'translation'))!=fingerprint(json.loads(row['payload']).get('provider')):raise HTTPException(409,'Cấu hình provider/model đã đổi. Bấm Tạo lượt mới để xác nhận cấu hình hiện tại; không dùng lại checkpoint của model cũ.')
         if action == 'cancel':
             result = db.execute("UPDATE jobs SET state='canceled' WHERE id=? AND state IN ('queued','running')", (job_id,))
         else:
             result = db.execute("UPDATE jobs SET state='queued',error=NULL,progress=0 WHERE id=? AND state IN ('failed','canceled') AND attempts<3", (job_id,))
         if not result.rowcount:
-            raise HTTPException(409, 'Job missing, not eligible, or retry limit reached')
+            raise HTTPException(409, 'Trạng thái tác vụ đã thay đổi. Hãy làm mới danh sách trước khi thao tác.')
     return {'status': action}
 
 

@@ -20,6 +20,14 @@ def configured(kind, *, require_model=True):
     providers=json.loads(row[0]) if row else []
     selected=next((p for p in providers if p['kind']==kind),None)
     if not selected and kind=='tts':selected=dict(DEFAULT_TTS)
+    if not selected and kind=='asr':
+        from .local_asr import DEFAULT,ready
+        if ready(DEFAULT['model']):selected=dict(DEFAULT)
+    if selected and selected.get('protocol')=='faster_whisper':
+        from .local_asr import ready,revision
+        installed=ready(selected['model'])
+        if require_model and not installed:raise ProviderError('ASR local chưa có model đã chọn. Chạy uv run python scripts/install_asr_model.py --model '+selected['model'])
+        if installed:selected={**selected,'model_revision':revision(selected['model'])}
     if not selected or (require_model and not selected.get('model')):
         label={'asr':'ASR (Whisper/faster-whisper hoặc API nhận dạng)','translation':'LLM (Ollama hoặc OpenAI-compatible)','vision':'Vision (model có khả năng đọc ảnh)','tts':'Giọng đọc (TTS)'}[kind]
         raise ProviderError(f'Chưa cấu hình {label}. Mở Cài đặt → nhóm tương ứng. VieNeu chỉ tạo giọng, không nhận dạng hay dịch phụ đề.')
@@ -58,6 +66,10 @@ def request(config, path, *, body=None, files=None, data=None, max_bytes=8*1024*
 
 
 def check_models(config):
+    if config.get('protocol')=='faster_whisper':
+        from .local_asr import MODELS,ready
+        models=[m for m in MODELS if ready(m)]
+        return {'connected':config['model'] in models,'models':models,'configured_model_available':config['model'] in models,'capabilities':['local_audio_transcription'],'inference_verified':False}
     if config.get('protocol')=='ollama':
         data=request(ollama_config(config),'api/tags',timeout=10)
         if not isinstance(data,dict) or not isinstance(data.get('models'),list):
@@ -96,6 +108,7 @@ def chat_json(config, messages, images=None):
 
 def signature(config):
     value={k:config.get(k,'openai' if k=='protocol' else '') for k in ('endpoint','protocol','model','key_env')}
+    if config.get('model_revision'):value['model_revision']=config['model_revision']
     return hashlib.sha256(json.dumps(value,sort_keys=True).encode()).hexdigest()
 
 

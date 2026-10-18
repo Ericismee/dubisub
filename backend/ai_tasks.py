@@ -83,10 +83,20 @@ def run(job_id):
                 frames+=audio.getnframes()
         for index in range(saved['next_batch'],len(chunks)):
             check()
-            with chunks[index].open('rb') as audio:
-                fields={'model':payload['provider']['model'],'response_format':'verbose_json','timestamp_granularities[]':'segment'}
-                if payload.get('source_language')!='auto':fields['language']=payload['source_language'].split('-')[0]
-                response=request(payload['provider'],'audio/transcriptions',files={'file':(chunks[index].name,audio,'audio/wav')},data=fields)
+            if payload['provider'].get('protocol')=='faster_whisper':
+                from .local_asr import transcribe
+                last_progress=[0.]
+                def local_progress(seconds):
+                    now=time.monotonic()
+                    if now-last_progress[0]<1:return
+                    last_progress[0]=now
+                    with store.connect() as db:db.execute("UPDATE jobs SET progress=? WHERE id=? AND owner=? AND state='running'",(min(89,round(10+80*(index+min(1,seconds/max(.001,offsets[index][1])))/len(chunks))),job_id,job['owner']))
+                response=transcribe(chunks[index],payload['provider'],payload.get('source_language','auto'),check,local_progress)
+            else:
+                with chunks[index].open('rb') as audio:
+                    fields={'model':payload['provider']['model'],'response_format':'verbose_json','timestamp_granularities[]':'segment'}
+                    if payload.get('source_language')!='auto':fields['language']=payload['source_language'].split('-')[0]
+                    response=request(payload['provider'],'audio/transcriptions',files={'file':(chunks[index].name,audio,'audio/wav')},data=fields)
             segments=response.get('segments') if isinstance(response,dict) else None
             if not isinstance(segments,list) or len(segments)>5000:raise ProviderError('ASR phải trả segments với timestamp thật; không tự tạo thời gian.')
             detected=response.get('language') if isinstance(response,dict) else None
@@ -105,6 +115,8 @@ def run(job_id):
                 if cue.get('avg_logprob',0)<-1:cue['review_reasons'].append('ASR báo log-probability thấp')
                 if cue.get('no_speech_prob',0)>.6:cue['review_reasons'].append('ASR chưa chắc có lời nói')
                 if language=='und':cue['review_reasons'].append('Chưa xác định ngôn ngữ')
+                probability=response.get('language_probability')
+                if isinstance(probability,(int,float)) and not isinstance(probability,bool) and 0<=probability<.6:cue['review_reasons'].append('Ngôn ngữ nhận dạng chưa chắc; cần nghe đối chiếu')
                 if index and start<12:cue['review_reasons'].append('Ranh giới chunk overlap; cần nghe đối chiếu')
                 duplicate=False
                 for old in saved['cues'][-200:]:
