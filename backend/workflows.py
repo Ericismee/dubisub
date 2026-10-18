@@ -33,6 +33,7 @@ class Translate(BaseModel):
     track_id: str
     target_languages: list[str] = Field(min_length=1,max_length=8)
     revision: int
+    cue_ids: list[str] | None = Field(default=None,min_length=1,max_length=5000)
 
     @field_validator('target_languages')
     @classmethod
@@ -67,6 +68,35 @@ class Glossary(BaseModel):
 class Review(BaseModel):
     revision: int
     reviewed: bool
+
+class TrackRevision(BaseModel):
+    revision:int
+
+@router.post('/projects/{project_id}/tracks/{track_id}/archive')
+def archive_track(project_id:str,track_id:str,body:TrackRevision):
+    with store.connect() as db:
+        db.execute('BEGIN IMMEDIATE');doc=store.project(db,project_id)
+        if doc['revision']!=body.revision:raise HTTPException(409,'Dự án đã thay đổi. Mở lại trước khi xóa bản phụ đề.')
+        track=next((t for t in doc['tracks'] if t['id']==track_id),None)
+        if not track:raise KeyError(track_id)
+        active=db.execute("SELECT id FROM jobs WHERE project_id=? AND state IN ('queued','running') LIMIT 1",(project_id,)).fetchone()
+        if active:raise HTTPException(409,'Chờ hoặc hủy tác vụ đang chạy trước khi xóa bản phụ đề.')
+        if db.execute("SELECT id FROM pipelines WHERE project_id=? AND json_extract(document,'$.state') IN ('queued','running') LIMIT 1",(project_id,)).fetchone():raise HTTPException(409,'Chờ hoặc hủy Auto trước khi xóa bản phụ đề.')
+        doc.setdefault('archived_tracks',[]).append(track)
+        doc['tracks']=[t for t in doc['tracks'] if t['id']!=track_id]
+        for child in doc['tracks']:
+            if child.get('source_track_id')==track_id:child['reviewed']=False;child['source_changed']=True
+        store.save(db,doc)
+    return doc
+
+@router.post('/projects/{project_id}/tracks/restore-last')
+def restore_track(project_id:str,body:TrackRevision):
+    with store.connect() as db:
+        db.execute('BEGIN IMMEDIATE');doc=store.project(db,project_id)
+        if doc['revision']!=body.revision:raise HTTPException(409,'Dự án đã thay đổi. Mở lại trước khi khôi phục.')
+        if not doc.get('archived_tracks'):raise HTTPException(422,'Không có bản phụ đề đã xóa.')
+        doc['tracks'].append(doc['archived_tracks'].pop());store.save(db,doc)
+    return doc
 
 
 class NewTrack(BaseModel):
@@ -159,12 +189,14 @@ def translate(project_id:str,body:Translate):
         if doc['revision']!=body.revision:raise HTTPException(409,'Phụ đề đã thay đổi. Hãy lưu và mở lại trước khi dịch.')
         source=next((t for t in doc['tracks'] if t['id']==body.track_id),None)
         if not source or not source['cues']:raise HTTPException(422,'Chọn một track phụ đề có nội dung.')
+        if body.cue_ids is not None and (len(set(body.cue_ids))!=len(body.cue_ids) or not set(body.cue_ids)<= {c['id'] for c in source['cues']}):raise HTTPException(422,'Danh sách câu cần dịch không hợp lệ.')
         if source.get('kind') in ('review','description'):raise HTTPException(422,'Luồng dịch lời thoại không nhận track review/caption AI. Dịch kịch bản cần giữ loại nội dung và timeline riêng.')
         for language in body.target_languages:
             if language==source.get('language'):raise HTTPException(422,'Đích phải khác ngôn ngữ track nguồn.')
             existing=db.execute("SELECT id FROM jobs WHERE project_id=? AND kind='translate' AND state IN ('queued','running') AND json_extract(payload,'$.source.id')=? AND json_extract(payload,'$.target_language')=?",(project_id,source['id'],language)).fetchone()
             if existing:raise HTTPException(409,'Đang có tác vụ dịch cùng track và ngôn ngữ.')
             jid=store.uid();payload={'source':source,'target_language':language,'provider':provider,'glossary':doc.get('glossary',{})}
+            if body.cue_ids is not None:payload['cue_ids']=body.cue_ids
             db.execute("INSERT INTO jobs(id,project_id,asset_id,kind,payload) VALUES(?,?,?,'translate',?)",(jid,project_id,source['asset_id'],json.dumps(payload)))
             jobs.append({'id':jid,'language':language})
     return {'jobs':jobs}

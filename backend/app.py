@@ -246,6 +246,9 @@ def read(project_id: str):
         for job in document['jobs']:
             payload=json.loads(job.pop('payload'));job['can_retry']=job['state'] in ('failed','canceled') and job['attempts']<3
             if job['state'] in ('failed','canceled') and job['kind'] in ('transcribe','translate'):
+                old_model=payload.get('provider',{}).get('model','').lower()
+                if job['kind']=='transcribe' and old_model.split(':')[0]=='nomic-embed-text':
+                    job['error']='Lượt cũ dùng nomic-embed-text (model embedding, không nhận dạng audio). Chọn ASR faster-whisper local hoặc API Whisper rồi bấm Tạo lượt mới. Lỗi cũ được giữ trong lịch sử.'
                 from .providers import configured,ProviderError
                 role='asr' if job['kind']=='transcribe' else 'translation'
                 if role not in current_providers:

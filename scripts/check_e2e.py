@@ -219,9 +219,9 @@ def main():
                     page.locator('.artifact-list a').click()
                 assert Path(rendered.value.path()).stat().st_size>100
                 page.get_by_label('Ngôn ngữ dịch đích',exact=True).fill('vi, en')
-                page.get_by_role('button',name='Dịch track đã chọn',exact=True).click()
+                page.get_by_role('button',name='Dịch bản phụ đề đang chọn',exact=True).click()
                 expect(page.locator('.track-select option')).to_have_count(3,timeout=20000)
-                english=page.locator('.track-select option').filter(has_text='· en ·').get_attribute('value')
+                english=page.locator('.track-select option').filter(has_text='· Tiếng Anh ·').get_attribute('value')
                 page.get_by_label('Track phụ đề',exact=True).select_option(english)
                 expect(page.get_by_label('Câu 1',exact=True)).to_have_value('fixture-en: Chào DubiSub — tiếng Việt 世界')
                 page.get_by_role('button',name='Đánh dấu đã duyệt',exact=True).click()
@@ -346,7 +346,7 @@ def main():
                 auto.get_by_role('button',name='Chạy Auto',exact=True).click()
                 expect(auto.locator('.auto-runs a').filter(has_text='MP4 ·')).to_have_count(1,timeout=35000)
                 auto.get_by_role('button',name='Đóng Auto',exact=True).click()
-                expect(page.get_by_label('Track phụ đề',exact=True).locator('option:checked')).to_contain_text('· vi ·')
+                expect(page.get_by_label('Track phụ đề',exact=True).locator('option:checked')).to_contain_text('· Tiếng Việt ·')
                 expect(page.locator('.subtitle-mask-preview')).to_be_visible()
                 page.get_by_label('Hiện phụ đề',exact=True).uncheck()
                 assert page.locator('video').evaluate('(v)=>v.textTracks[0].mode')=='hidden'

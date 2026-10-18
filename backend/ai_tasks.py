@@ -57,7 +57,7 @@ def run(job_id):
         with store.connect() as db:
             db.execute("UPDATE jobs SET checkpoint=?,progress=? WHERE id=? AND owner=? AND state='running'",(json.dumps(saved),int(10+80*index/max(total,1)),job_id,job['owner']))
     if job['kind']=='translate':
-        groups=batches(payload['source']['cues'])
+        groups=batches([c for c in payload['source']['cues'] if payload.get('cue_ids') is None or c['id'] in payload['cue_ids']])
         for index in range(saved['next_batch'],len(groups)):
             check();group=groups[index]
             prompt={'target_language':payload['target_language'],'source_language':payload['source'].get('language','und'),

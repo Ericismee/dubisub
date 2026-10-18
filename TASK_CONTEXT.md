@@ -26,3 +26,6 @@ npm run build --prefix frontend
 uv run python scripts/check_e2e.py (requires3600/6060 free; isolated fixture data)
 uv run python scripts/check_ai_live.py --llm-model qwen2.5:7b --vision-model llava:latest
 powershell -ExecutionPolicy Bypass -File scripts/start.ps1
+
+
+2026-10-18 continuation: historical HTTP400 traced to old ASR nomic-embed-text snapshots; current local faster-whisper small installed and live speech→Qwen Vietnamese→sub/MP4 smoke previously passed. HTTP adapter rejects invalid ASR model before network. Added cue/selected-version/all-source translation, readable subtitle version selector, reversible archive/restore, nearby cue undo/redo and clearer settings. Backend52 tests/build passed; extended isolated Playwright passed; owned studio restarted idle and UI/API200. Pending: persistent on-video subtitle selection/drag/layout with shared export and geometry undo; do not claim implemented. Files: backend/providers.py, workflows.py, ai_tasks.py; frontend/src/main.tsx, WorkflowPanel.tsx, SettingsDialog.tsx; tests/test_ai_workflows.py. Preserve source/media and concurrent Git index changes. No NotebookE access.

@@ -41,6 +41,8 @@ def configured(kind, *, require_model=True):
 
 
 def request(config, path, *, body=None, files=None, data=None, max_bytes=8*1024**2, timeout=120):
+    if path.lstrip('/')=='audio/transcriptions' and ('vieneu' in config.get('model','').lower() or config.get('model','').lower().split(':')[0]=='nomic-embed-text'):
+        raise ProviderError('Model đã chọn không nhận dạng audio. Chọn ASR → faster-whisper local (small), rồi tạo lượt nhận dạng mới; không thử lại tác vụ dùng cấu hình cũ.')
     parts=urlsplit(config['endpoint'])
     if parts.scheme not in ('http','https') or not parts.hostname or parts.username or parts.query or parts.fragment:
         raise ProviderError('Endpoint provider không hợp lệ.')
@@ -54,7 +56,10 @@ def request(config, path, *, body=None, files=None, data=None, max_bytes=8*1024*
             with client.stream('GET' if body is None and files is None else 'POST',config['endpoint'].rstrip('/')+'/'+path.lstrip('/'),headers=headers,json=body,files=files,data=data) as response:
                 if response.status_code in (401,403):raise ProviderError('Provider từ chối xác thực. Kiểm tra quyền truy cập và khóa.')
                 if response.status_code==429:raise ProviderError('Provider đang giới hạn lượt gọi. Hãy thử lại sau.')
-                if response.status_code>=300:raise ProviderError(f'Provider trả HTTP {response.status_code}; kiểm tra endpoint/model tương thích.')
+                if response.status_code>=300:
+                    role='ASR → Nhận dạng giọng nói' if 'transcriptions' in path else 'TTS → Giọng đọc' if 'speech' in path else 'LLM / Vision'
+                    hint='Yêu cầu không phù hợp giao thức hoặc model. Kiểm tra đúng nhóm '+role+' trong Cài đặt, kiểm tra kết nối và khả năng xử lý; sau khi sửa hãy tạo lượt mới.'
+                    raise ProviderError(f'Provider trả HTTP {response.status_code}. {hint}')
                 content=bytearray()
                 for chunk in response.iter_bytes(65536):
                     content.extend(chunk)

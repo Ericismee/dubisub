@@ -194,3 +194,28 @@ def test_voice_catalog_rejects_malformed_provider_metadata(monkeypatch):
     with pytest.raises(ProviderError,match='model'):voices.catalog({})
     monkeypatch.setattr(voices,'request',lambda config,path,**kw: {'data':[{'id':'v','languages':'vi'}]} if path=='voices' else {'data':[]})
     assert voices.catalog({})[0]['languages']==['vi']
+
+
+def test_selected_cue_translation_and_recoverable_track_delete(provider):
+    client,state,_=provider;p=source(client);pid=p['id'];original=p['tracks'][0];cue=original['cues'][1]
+    r=client.post(f'/api/projects/{pid}/translate',json={'revision':p['revision'],'track_id':original['id'],'target_languages':['vi'],'cue_ids':[cue['id']]})
+    assert r.status_code==202,r.text
+    assert worker.run_once()
+    p=client.get('/api/projects/'+pid).json();translated=p['tracks'][-1]
+    assert p['tracks'][0]==original
+    assert [c['id'] for c in translated['cues']]==[cue['id']]
+    assert translated['cues'][0]['start_ms']==cue['start_ms']
+    r=client.post(f"/api/projects/{pid}/tracks/{original['id']}/archive",json={'revision':p['revision']})
+    assert r.status_code==200,r.text
+    p=r.json();assert len(p['tracks'])==1 and p['archived_tracks'][0]==original
+    assert not p['tracks'][0]['reviewed']
+    stale=client.post(f'/api/projects/{pid}/tracks/restore-last',json={'revision':p['revision']-1})
+    assert stale.status_code==409
+    r=client.post(f'/api/projects/{pid}/tracks/restore-last',json={'revision':p['revision']})
+    assert r.status_code==200 and r.json()['tracks'][-1]==original
+
+
+def test_wrong_asr_model_blocked_before_network():
+    from backend.providers import request,ProviderError
+    with pytest.raises(ProviderError,match='faster-whisper'):
+        request({'endpoint':'http://127.0.0.1:1','model':'nomic-embed-text:latest'},'audio/transcriptions',files={})
