@@ -26,7 +26,8 @@ class Plan(BaseModel):
     spoiler:Literal['none','limited','full']='limited'
     target_duration_s:int=Field(default=60,ge=10,le=3600)
     condense:bool=False
-    output:Literal['draft','subtitles']='draft'
+    output:Literal['draft','subtitles','video']='draft'
+    render_plan:dict=Field(default_factory=dict)
     confirmed:bool=False
     consent_signature:str=''
     @field_validator('targets')
@@ -57,12 +58,17 @@ def plan_for(pid,body):
         elif len(candidates)>1:raise HTTPException(422,'Có nhiều track nguồn. Hãy chọn rõ track cần dùng.')
     need_asr=body.force_asr or not chosen and body.mode!='describe'
     configs={};blockers=[];stages=[];transfers=[]
-    if body.mode!='translate' and body.output=='subtitles':blockers.append('Kịch bản/caption AI cần duyệt và căn timeline trước khi tạo phụ đề. Chọn bản nháp; xuất Markdown/JSON trong mục Phân tích.')
+    if body.mode!='translate' and body.output!='draft':blockers.append('Kịch bản/caption AI cần duyệt và căn timeline trước khi xuất. Chọn bản nháp.')
+    if body.output=='video':
+        if not any(s.get('codec_type')=='video' for s in meta.get('streams',[])):blockers.append('Xuất phụ đề lên hình cần video đã probe.')
+        else:
+            from .rendering import normalize_plan
+            normalize_plan(body.render_plan,round(float(meta.get('format',{}).get('duration',0))*1000))
     if not body.asset_id and (not chosen or not chosen.get('asset_id')):blockers.append('Auto cần nguồn file/link hoặc track đã nhập từ file; chỉnh sửa/xuất track thủ công vẫn dùng được.')
     if need_asr:
         if not any(s.get('codec_type')=='audio' for s in meta.get('streams',[])):blockers.append('Không có audio đã probe để ASR. Chọn phụ đề có sẵn hoặc bật vision cho mô tả.')
         try:
-            configs['asr']=configured('asr');transfers.append({'role':'ASR','endpoint':configs['asr']['endpoint'],'model':configs['asr']['model'],'data':'Audio mono 16 kHz theo chunk; trả timestamp thực.'})
+            configs['asr']=configured('asr');transfers.append({'role':'ASR','endpoint':'Local trên máy · không gửi audio' if configs['asr'].get('protocol')=='faster_whisper' else configs['asr']['endpoint'],'model':configs['asr']['model'],'data':'Audio mono 16 kHz theo chunk; trả timestamp thực.'})
         except ProviderError as e:blockers.append(str(e))
         stages.append('asr')
     if body.mode=='describe' and not body.use_vision:blockers.append('Mô tả video ít lời cần vision; không dùng suy đoán từ track rỗng.')
@@ -80,7 +86,8 @@ def plan_for(pid,body):
         transfers.append({'role':'LLM','endpoint':configs['translation']['endpoint'],'model':configs['translation']['model'],'data':'Transcript/glossary hoặc kết quả cảnh; không gửi video gốc.'})
     except ProviderError as e:blockers.append(str(e))
     stages.append('translate' if body.mode=='translate' else 'analyze')
-    if body.output=='subtitles':stages.append('export')
+    if body.output in ('subtitles','video'):stages.append('export')
+    if body.output=='video':stages.append('render')
     # Source/model/settings hashes bind consent and prevent changed inputs being sent silently.
     digest=fingerprint({'request':body.model_dump(exclude={'confirmed','consent_signature'}),'providers':configs,'source':fingerprint(chosen['cues']) if chosen and not body.force_asr else media.get('checksum') if media else None,'glossary':doc.get('glossary',{})})
     return {'signature':digest,'stages':stages,'transfers':transfers,'blockers':blockers,'source_track_id':chosen['id'] if chosen and not body.force_asr else None,'source_hash':fingerprint(chosen['cues']) if chosen and not body.force_asr else None,'source':chosen if chosen and not body.force_asr else None,'providers':configs,'glossary':doc.get('glossary',{}),'asset_id':body.asset_id or (chosen['asset_id'] if chosen else None),'cost':'Chưa có bảng giá/token được xác minh; không ước tính chi phí giả.','scope':'frame_sampling' if body.use_vision else 'transcript_only'}
@@ -114,6 +121,8 @@ def listing(pid:str):
     for row in rows:
         p=json.loads(row[0]);item={k:v for k,v in p.items() if k not in ('plan','request')}
         item['outputs']=[{'job_id':jid,**f} for jid,entry in doc.get('auto_exports',{}).items() if entry.get('pipeline_id')==p['id'] for f in entry['files']]
+        render_ids={jid for step in p['steps'].values() if step['stage']=='render' for jid in step['job_ids']}
+        item['videos']=[{'id':a['id'],'filename':a['filename']} for a in doc.get('artifacts',[]) if a['job_id'] in render_ids]
         result.append(item)
     return result
 
@@ -174,6 +183,11 @@ def tick():
                         source=plan['source'];payloads=[('translate',{'source':source,'target_language':language,'provider':plan['providers']['translation'],'glossary':plan['glossary'],'style':p['request'].get('style','natural'),'condense':p['request'].get('condense',False)}) for language in p['request']['targets'] if language!=source.get('language')]
                         if source.get('language') in p['request']['targets']:p['track_ids']=[source['id']]
                     elif stage=='export':payloads=[('auto_export',{'track_ids':p.get('track_ids',[]),'track_hashes':{t['id']:fingerprint(t['cues']) for t in doc['tracks'] if t['id'] in p.get('track_ids',[])},'pipeline_id':p['id']})]
+                    elif stage=='render':
+                        from .rendering import normalize_plan
+                        meta=json.loads(db.execute('SELECT metadata FROM assets WHERE id=?',(aid,)).fetchone()[0])
+                        render_plan=normalize_plan(p['request'].get('render_plan',{}),round(float(meta['format']['duration'])*1000))
+                        payloads=[('render',{'plan':render_plan,'track_id':t['id'],'cues':t['cues'],'burn_subtitles':True,'source_revision':doc['revision'],'auto_export_consent':p['plan']['signature']}) for t in doc['tracks'] if t['id'] in p.get('track_ids',[])]
                     elif stage=='vision':payloads=[('vision',{'provider':plan['providers']['vision'],'language':p['request']['targets'][0]})]
                     elif stage=='analyze':payloads=[('analyze',{'provider':plan['providers']['translation'],'source':plan.get('source'),'scenes':plan.get('scenes'),'mode':p['request']['mode'],'language':p['request']['targets'][0],'style':p['request'].get('style','natural'),'spoiler':p['request'].get('spoiler','limited'),'target_duration_s':p['request'].get('target_duration_s',60)})]
                     ids=[]

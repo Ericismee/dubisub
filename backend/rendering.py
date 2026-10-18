@@ -18,10 +18,15 @@ def normalize_plan(raw, duration_ms):
     aspect=raw.get('aspect','16:9');resolution=raw.get('resolution',720);fps=raw.get('fps',24);volume=raw.get('volume',1)
     if aspect not in ('16:9','9:16','1:1') or resolution not in (360,720,1080) or fps not in (24,25,30):raise ValueError('Preset xuất không được hỗ trợ.')
     if not isinstance(volume,(int,float)) or isinstance(volume,bool) or not math.isfinite(volume) or not 0<=volume<=2:raise ValueError('Âm lượng phải từ 0 đến 2 lần.')
+    mask=raw.get('subtitle_mask',{'enabled':False,'x':.05,'y':.74,'width':.9,'height':.24,'strength':8})
+    if not isinstance(mask,dict) or not isinstance(mask.get('enabled'),bool):raise ValueError('Thiết lập vùng làm mờ không hợp lệ.')
+    mask={k:mask.get(k,v) for k,v in {'enabled':False,'x':.05,'y':.74,'width':.9,'height':.24,'strength':8}.items()}
+    if any(isinstance(mask[k],bool) or not isinstance(mask[k],(int,float)) or not math.isfinite(mask[k]) for k in ('x','y','width','height','strength')):raise ValueError('Vùng làm mờ cần số hữu hạn.')
+    if not (0<=mask['x']<=.98 and 0<=mask['y']<=.98 and .02<=mask['width']<=1 and .02<=mask['height']<=1 and mask['x']+mask['width']<=1.000001 and mask['y']+mask['height']<=1.000001 and 1<=mask['strength']<=30):raise ValueError('Vùng làm mờ phải nằm trong khung nguồn; cường độ 1–30.')
     w,h={'16:9':(resolution*16//9,resolution),'9:16':(resolution,resolution*16//9),'1:1':(resolution,resolution)}[aspect]
     w+=w%2;h+=h%2
     return {'schema_version':1,'in_ms':start,'out_ms':end,'speed':float(speed),'aspect':aspect,'resolution':resolution,'fps':fps,'volume':float(volume),
-            'width':w,'height':h,'duration_ms':round((end-start)/speed),'fit':'contain'}
+            'width':w,'height':h,'duration_ms':round((end-start)/speed),'fit':'contain','subtitle_mask':mask}
 
 
 def output_cues(cues, plan):
@@ -45,9 +50,14 @@ def execute(job, command):
         (directory/'captions.ass').write_text(export(cues,'ass'),encoding='utf-8')
         filters+=',subtitles=filename=captions.ass:charenc=UTF-8'
     partial=directory/'render.mp4'
+    mask=plan.get('subtitle_mask',{})
+    if mask.get('enabled'):
+        graph=f"[0:v:0]split[base][region];[region]crop=w='max(2,trunc(iw*{mask['width']}/2)*2)':h='max(2,trunc(ih*{mask['height']}/2)*2)':x=iw*{mask['x']}:y=ih*{mask['y']},boxblur=luma_radius='max(0,min({mask['strength']},min(w,h)/2-1))':luma_power=2[blurred];[base][blurred]overlay=x=main_w*{mask['x']}:y=main_h*{mask['y']},{filters}[vout]"
+        video_args=['-filter_complex',graph,'-map','[vout]']
+    else:video_args=['-vf',filters,'-map','0:v:0']
     args=[os.getenv('DUBISUB_FFMPEG','ffmpeg'),'-v','error','-nostdin','-ss',str(plan['in_ms']/1000),'-t',str((plan['out_ms']-plan['in_ms'])/1000),'-protocol_whitelist','file,pipe',
           '-format_whitelist','mov,matroska,webm,avi,mp3,wav,flac,ogg,mpegts,mpeg,aac','-i',job['path'],
-          '-map','0:v:0','-map','0:a:0?','-vf',filters,'-af',f"atempo={plan['speed']},volume={plan['volume']}",
+          *video_args,'-map','0:a:0?','-af',f"atempo={plan['speed']},volume={plan['volume']}",
           '-c:v','libx264','-preset','veryfast','-crf','20','-threads','2','-pix_fmt','yuv420p','-c:a','aac','-movflags','+faststart',
           '-fs',str(int(os.getenv('DUBISUB_MAX_UPLOAD_MB','2048'))*1024**2),'-y',str(partial)]
     command(args,job,timeout=10800,cwd=directory)
