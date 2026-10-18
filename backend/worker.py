@@ -21,7 +21,8 @@ class Canceled(Exception):
 
 def command(args, job, timeout=120, cwd=None):
     with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
-        process = subprocess.Popen(args, stdout=output, stderr=errors, stdin=subprocess.DEVNULL, cwd=cwd)
+        process = subprocess.Popen(args, stdout=output, stderr=errors, stdin=subprocess.DEVNULL, cwd=cwd,
+                                   start_new_session=os.name!='nt',creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name=='nt' else 0)
         started = time.monotonic()
         try:
             while process.poll() is None:
@@ -45,7 +46,14 @@ def command(args, job, timeout=120, cwd=None):
             return data.decode('utf-8')
         finally:
             if process.poll() is None:
-                process.kill()
+                if os.name=='nt':
+                    try:subprocess.run(['taskkill.exe','/PID',str(process.pid),'/T','/F'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10)
+                    except (OSError,subprocess.TimeoutExpired):pass
+                else:
+                    import signal
+                    try:os.killpg(process.pid,signal.SIGKILL)
+                    except ProcessLookupError:pass
+                if process.poll() is None:process.kill()
             process.wait()
 
 

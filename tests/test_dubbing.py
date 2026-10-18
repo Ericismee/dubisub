@@ -98,3 +98,5 @@ def test_provider_roles_and_default_vieneu(tmp_path,monkeypatch):
         c.put('/api/settings',json={'providers':[{'kind':'translation','protocol':'ollama','endpoint':'https://example.invalid/v1','model':'vieneu-v3-turbo'}]})
         r=c.post('/api/projects/nonexistent/translate',json={'revision':0,'track_id':'none','target_languages':['vi']})
         assert r.status_code==409 and 'VieNeu chỉ dùng' in r.json()['detail']
+        c.put('/api/settings',json={'providers':[{'kind':'asr','endpoint':'http://127.0.0.1:11434/v1','model':'nomic-embed-text:latest'}]})
+        with pytest.raises(ProviderError,match='embedding'):configured('asr')

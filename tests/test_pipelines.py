@@ -82,3 +82,11 @@ def test_auto_same_language_and_not_yet_available_modes(provider):
     p=client.get(f'/api/projects/{p["id"]}').json()
     plan=client.post(f'/api/projects/{p["id"]}/auto/plan',json={'revision':p['revision'],'mode':'review','output':'subtitles','track_id':p['tracks'][0]['id']}).json()
     assert plan['blockers']
+
+def test_one_active_pipeline_per_project(provider):
+    client,state,_=provider;p=source(client);record(configured('translation'),'text','fixture_validation')
+    launch(client,p)
+    body={'revision':p['revision'],'track_id':p['tracks'][0]['id']}
+    plan=client.post(f'/api/projects/{p["id"]}/auto/plan',json=body).json()
+    r=client.post(f'/api/projects/{p["id"]}/auto',json={**body,'confirmed':True,'consent_signature':plan['signature']})
+    assert r.status_code==409 and not state['requests']

@@ -25,6 +25,8 @@ def configured(kind, *, require_model=True):
         raise ProviderError(f'Chưa cấu hình {label}. Mở Cài đặt → nhóm tương ứng. VieNeu chỉ tạo giọng, không nhận dạng hay dịch phụ đề.')
     if kind!='tts' and 'vieneu' in selected.get('model','').lower():
         raise ProviderError('VieNeu chỉ dùng cho Giọng đọc (TTS). Dịch thuật cần Ollama/LLM; ASR cần Whisper hoặc provider nhận dạng. Hãy sửa đúng nhóm trong Cài đặt.')
+    if kind in ('asr','translation','vision') and selected.get('model','').lower().split(':')[0]=='nomic-embed-text':
+        raise ProviderError('nomic-embed-text là model embedding, không phải model nhận dạng, chat hay vision. ASR cần Whisper/faster-whisper hoặc API audio/transcriptions; LLM cần model chat như Qwen. Không gửi audio/video vào model embedding.')
     if selected.get('key_env') and not os.getenv(selected['key_env']):
         raise ProviderError('Chưa tìm thấy biến môi trường khóa đã chọn trong tiến trình xử lý.')
     return selected

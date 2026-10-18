@@ -11,4 +11,12 @@ if ([string]$taskProcess.StartTime.ToUniversalTime().Ticks -ne [string]$taskReco
 }
 # Stop only the process tree started by this workspace's recorded launcher.
 & taskkill.exe /PID ([string]$taskProcess.Id) /T /F
-if ($LASTEXITCODE -ne 0) { throw 'Could not stop the DubiSub launcher tree.' }
+if ($LASTEXITCODE -ne 0) {
+    # Children may exit while taskkill walks the tree. A vanished recorded
+    # launcher is success; start.ps1 still refuses any occupied application port.
+    $taskRemaining = Get-Process -Id $taskRecord.pid -ErrorAction SilentlyContinue
+    if ($null -ne $taskRemaining -and [string]$taskRemaining.StartTime.ToUniversalTime().Ticks -eq [string]$taskRecord.startTicks) {
+        throw 'Could not stop the DubiSub launcher tree.'
+    }
+    Write-Host 'Recorded DubiSub launcher stopped; some children had already exited.'
+}

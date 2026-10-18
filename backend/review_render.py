@@ -5,6 +5,7 @@ import shutil
 from .providers import ProviderError
 
 def render(job,command,segments,audio,destination,directory,source_duration_ms):
+    from .worker import FORMATS
     ffmpeg=os.getenv('DUBISUB_FFMPEG','ffmpeg');files=[]
     budget=min(int(os.getenv('DUBISUB_MAX_UPLOAD_MB','2048'))*1024**2,shutil.disk_usage(directory).free-128*1024**2)
     if budget<16*1024**2:raise ProviderError('Không đủ đĩa để dựng review.')
@@ -15,7 +16,7 @@ def render(job,command,segments,audio,destination,directory,source_duration_ms):
         if available<=0:raise ProviderError('Cảnh nguồn không nằm trong video đã chọn.')
         duration=s['output_end_ms']-s['start_ms'];clip=directory/f'clip-{index:04d}.mp4'
         vf=f'scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2,fps=25,tpad=stop_mode=clone:stop_duration={duration/1000},trim=duration={duration/1000},setpts=PTS-STARTPTS'
-        command([ffmpeg,'-v','error','-nostdin','-ss',str(start/1000),'-t',str(min(available,duration)/1000),'-protocol_whitelist','file,pipe','-i',job['path'],'-an','-vf',vf,'-c:v','libx264','-preset','veryfast','-threads','2','-pix_fmt','yuv420p','-fs',str(max(1,budget-used)),'-y',str(clip)],job,timeout=600)
+        command([ffmpeg,'-v','error','-nostdin','-ss',str(start/1000),'-t',str(min(available,duration)/1000),'-protocol_whitelist','file,pipe','-format_whitelist',FORMATS,'-i',job['path'],'-an','-vf',vf,'-c:v','libx264','-preset','veryfast','-threads','2','-pix_fmt','yuv420p','-fs',str(max(1,budget-used)),'-y',str(clip)],job,timeout=600)
         used+=clip.stat().st_size
         if used>=budget:raise ProviderError('Dựng review chạm giới hạn dung lượng.')
         files.append(clip.name);s['render_source_range']={'start_ms':start,'end_ms':start+min(available,duration)};s['freeze_tail_ms']=max(0,duration-available)

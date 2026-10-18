@@ -99,13 +99,16 @@ def start(pid:str,body:Plan):
     with store.connect() as db:
         db.execute('BEGIN IMMEDIATE');doc=store.project(db,pid)
         if doc['revision']!=body.revision:raise HTTPException(409,'Dự án vừa thay đổi.')
+        running=db.execute("SELECT project_id FROM pipelines WHERE json_extract(document,'$.state')='running' LIMIT 20").fetchall()
+        if any(r[0]==pid for r in running):raise HTTPException(409,'Dự án đã có pipeline đang chạy; chờ hoàn tất hoặc hủy trước khi tạo lượt mới.')
+        if len(running)>=20:raise HTTPException(409,'Đã đủ 20 pipeline chờ/chạy; chờ worker xử lý trước khi thêm.')
         db.execute('INSERT INTO pipelines VALUES(?,?,?)',(pipeline['id'],pid,json.dumps(pipeline)))
     return {'id':pipeline['id'],'state':'running'}
 
 @router.get('/projects/{pid}/auto')
 def listing(pid:str):
     with store.connect() as db:
-        store.project(db,pid);rows=db.execute('SELECT document FROM pipelines WHERE project_id=? ORDER BY rowid DESC',(pid,)).fetchall()
+        store.project(db,pid);rows=db.execute('SELECT document FROM pipelines WHERE project_id=? ORDER BY rowid DESC LIMIT 100',(pid,)).fetchall()
     with store.connect() as db:doc=store.project(db,pid)
     result=[]
     for row in rows:
@@ -139,7 +142,7 @@ def control(pid:str,pipeline_id:str,action:Literal['cancel','retry']):
 
 def tick():
     with store.connect() as db:
-        db.execute('BEGIN IMMEDIATE');rows=db.execute('SELECT * FROM pipelines').fetchall()
+        db.execute('BEGIN IMMEDIATE');rows=db.execute("SELECT * FROM pipelines WHERE json_extract(document,'$.state')='running' ORDER BY rowid LIMIT 20").fetchall()
         for row in rows:
             p=json.loads(row['document'])
             if p['state']!='running':continue
