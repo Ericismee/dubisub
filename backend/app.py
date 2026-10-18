@@ -27,6 +27,8 @@ from .workflows import router as workflow_router
 app.include_router(workflow_router)
 from .voices import router as voices_router
 app.include_router(voices_router)
+from .dubbing import router as dubbing_router
+app.include_router(dubbing_router)
 
 
 @app.middleware('http')
@@ -134,6 +136,8 @@ def settings():
     with store.connect() as db:
         row = db.execute('SELECT providers FROM settings WHERE id=1').fetchone()
     providers = json.loads(row[0]) if row else []
+    from .providers import DEFAULT_TTS
+    if not any(p['kind']=='tts' for p in providers):providers.append(dict(DEFAULT_TTS))
     providers = [dict(**p, verified=False, capabilities=[], key_present=bool(p['key_env'] and os.getenv(p['key_env']))) for p in providers]
     return {'max_upload_mb': int(os.getenv('DUBISUB_MAX_UPLOAD_MB', '2048')),
             'providers': providers, 'ai_status': 'unverified' if providers else 'not_configured',

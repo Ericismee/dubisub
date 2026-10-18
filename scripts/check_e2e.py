@@ -33,18 +33,22 @@ def main():
         sample = work/'video tiếng Việt có khoảng trắng.mp4'
         sub = work/'phụ đề.srt'
         sub.write_text('1\n00:00:00,100 --> 00:00:01,200\nXin chào Việt Nam!\n\n2\n00:00:01,300 --> 00:00:02,900\nمرحبا 世界\n', encoding='utf-8-sig')
-        subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','testsrc2=s=320x180:r=24:d=3','-c:v','libx264','-pix_fmt','yuv420p','-y',str(sample)],check=True)
+        subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','testsrc2=s=320x180:r=24:d=3','-f','lavfi','-i','sine=frequency=440:duration=3','-c:a','aac','-c:v','libx264','-pix_fmt','yuv420p','-y',str(sample)],check=True)
         stats={'speech_calls':0}
         class FixtureHandler(BaseHTTPRequestHandler):
             def log_message(self,*args):pass
             def do_HEAD(self):self.serve(False)
             def do_GET(self):
+                if self.path=='/openapi.json':self.json_response({'paths':{'/v1/voices':{'post':{'requestBody':{'content':{'multipart/form-data':{'schema':{'$ref':'#/components/schemas/Enrollment'}}}}}}},'components':{'schemas':{'Enrollment':{'properties':{'name':{},'file':{},'denoise':{}}}}}});return
                 if self.path=='/v1/voices':self.json_response({'data':[{'id':'fixture-vi','name':'Fixture Vietnamese','languages':['vi'],'gender':'female'},{'id':'fixture-en','name':'Fixture English','languages':['en'],'gender':'male'}]});return
-                if self.path=='/v1/models':self.json_response({'data':[{'id':'fixture-model'}]});return
+                if self.path=='/v1/models':self.json_response({'data':[{'id':'fixture-model'},{'id':'vieneu-v3-turbo'}]});return
                 self.serve(True)
             def json_response(self,value):
                 data=json.dumps(value).encode();self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
             def do_POST(self):
+                if self.path=='/v1/voices':
+                    import re
+                    raw=self.rfile.read(int(self.headers['Content-Length']));name=re.search(b'name="name"\r\n\r\n([^\r]+)',raw).group(1).decode();self.json_response({'id':name});return
                 if self.path=='/v1/audio/speech':
                     import wave,io
                     self.rfile.read(int(self.headers['Content-Length']));stats['speech_calls']+=1
@@ -103,9 +107,9 @@ def main():
                 page.wait_for_function("fetch('/api/settings').then(r=>r.json()).then(s=>s.providers.some(p=>p.kind==='translation'&&p.model==='fixture-model'))")
                 settings.get_by_role('navigation',name='Nhóm cấu hình').get_by_role('button',name='Giọng đọc',exact=True).click()
                 settings.get_by_label('Endpoint API',exact=True).fill(f'http://127.0.0.1:{fixture.server_port}/v1')
-                settings.get_by_label('Model',exact=True).fill('fixture-model')
+                settings.get_by_label('Model',exact=True).fill('vieneu-v3-turbo')
                 settings.get_by_role('button',name='Lưu cấu hình',exact=True).click()
-                page.wait_for_function("fetch('/api/settings').then(r=>r.json()).then(s=>s.providers.some(p=>p.kind==='tts'&&p.model==='fixture-model'))")
+                page.wait_for_function("fetch('/api/settings').then(r=>r.json()).then(s=>s.providers.some(p=>p.kind==='tts'&&p.model==='vieneu-v3-turbo'))")
                 settings.get_by_role('navigation',name='Nhóm cấu hình').get_by_role('button',name='Lưu trữ & media',exact=True).click()
                 expect(settings.get_by_text('FFmpeg',exact=True)).to_be_visible()
                 settings.get_by_role('button',name='Đóng cài đặt',exact=True).click()
@@ -217,6 +221,50 @@ def main():
                 expect(page.locator('.voice-panel audio')).to_have_count(1)
                 page.locator('.voice-panel audio').evaluate('(a)=>a.play()')
                 assert stats['speech_calls']==1
+                # Controlled cloning contract + actual FFmpeg reference extraction/mix/export.
+                # Fixture audio is synthetic, not evidence of live voice similarity.
+                panel=page.locator('.dubbing-panel')
+                panel.get_by_role('button',name='Kiểm tra VieNeu & lấy giọng',exact=True).click()
+                expect(panel.get_by_text('vieneu-v3-turbo',exact=True)).to_be_visible()
+                panel.get_by_text('Lấy giọng mẫu từ media (3–8 giây)',exact=True).click()
+                panel.get_by_label('Mẫu giọng từ giây',exact=True).fill('0')
+                panel.get_by_label('Mẫu giọng đến giây',exact=True).fill('3')
+                panel.get_by_label('Tên hồ sơ giọng',exact=True).fill('Synthetic fixture reference')
+                panel.get_by_label('Tôi sở hữu hoặc được phép sử dụng giọng mẫu này.',exact=True).check()
+                panel.get_by_label('Tôi đã nghe lại: đoạn sạch, chỉ một người nói.',exact=True).check()
+                panel.get_by_role('button',name='Cắt & lưu hồ sơ giọng',exact=True).click()
+                expect(panel.locator('.reference-card')).to_have_count(1,timeout=15000)
+                panel.get_by_label('Nguồn giọng',exact=True).select_option('profile')
+                expect(panel.get_by_label('Giọng lồng tiếng',exact=True)).not_to_have_value('')
+                panel.locator('.dubbing-consent').filter(has_text='Tôi đồng ý gửi văn bản').locator('input').check()
+                panel.get_by_role('button',name='Tạo mẫu nghe / đọc văn bản',exact=True).click()
+                expect(panel.locator('.narration-result')).to_have_count(1,timeout=20000)
+                panel.get_by_text('Nhân vật & đọc track phụ đề',exact=True).click()
+                panel.get_by_role('button',name='Thêm nhân vật',exact=True).click()
+                panel.locator('.narration-cues select').first.select_option('Nhân vật 1')
+                panel.get_by_label('Xuất thêm MP4 dùng video gốc và giọng đọc mới (thay audio gốc).',exact=True).check()
+                panel.get_by_role('button',name='Đọc track đã chọn',exact=True).click()
+                expect(panel.locator('.narration-result')).to_have_count(2,timeout=25000)
+                expect(panel.get_by_text('Tải MP4 có giọng đọc',exact=True)).to_be_visible()
+                with page.expect_download() as narrated:
+                    panel.get_by_text('Tải MP4 có giọng đọc',exact=True).click()
+                assert Path(narrated.value.path()).stat().st_size>100
+                page.get_by_role('navigation',name='Công cụ studio').get_by_role('button',name='Phụ đề',exact=True).click()
+                page.get_by_role('navigation',name='Công cụ studio').get_by_role('button',name='Giọng đọc',exact=True).click()
+                expect(panel.locator('.narration-cues select').first).to_have_value('Nhân vật 1')
+                panel.get_by_role('button',name='Kiểm tra VieNeu & lấy giọng',exact=True).click()
+                expect(panel.get_by_text('vieneu-v3-turbo',exact=True)).to_be_visible()
+                panel.locator('.dubbing-consent').filter(has_text='Tôi đồng ý gửi văn bản').locator('input').check()
+                panel.get_by_text('Nhân vật & đọc track phụ đề',exact=True).click()
+                panel.get_by_role('button',name='Tạo lại riêng câu',exact=True).first.click()
+                expect(panel.locator('.narration-result')).to_have_count(3,timeout=20000)
+                assert panel.locator('.narration-warning').count()>0
+                page.screenshot(path='test-results/studio-clone-fixture.png',full_page=True)
+                page.once('dialog',lambda dialog:dialog.accept())
+                panel.get_by_role('button',name='Xóa hồ sơ & dữ liệu mẫu',exact=True).click()
+                expect(panel.locator('.reference-card')).to_have_count(0,timeout=15000)
+                expect(panel.locator('.narration-result')).to_have_count(0)
+
                 page.get_by_role('navigation',name='Công cụ studio').get_by_role('button',name='Phụ đề',exact=True).click()
                 page.get_by_label('Câu 1',exact=True).focus()
                 page.keyboard.press('Tab')

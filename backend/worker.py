@@ -123,6 +123,10 @@ def run_once(*, link_executor=None):
             except Exception:pass
     thread=threading.Thread(target=heartbeat,daemon=True);thread.start()
     try:
+        if job['kind'] in ('voice_extract','narrate'):
+            from .dubbing import execute
+            execute(job,command)
+            return True
         if job['kind']=='voice_sample':
             from .voices import execute
             execute(job,command)
@@ -180,6 +184,9 @@ def run_once(*, link_executor=None):
             db.execute("UPDATE jobs SET state='failed',error=? WHERE id=? AND owner=? AND state='running'", (message[:250], job['id'], OWNER))
     finally:
         stop.set();thread.join(timeout=1)
+        if job['kind'] in ('voice_extract','narrate'):
+            path=(store.root()/'dubbing-staging'/job['id']).resolve()
+            if path.is_relative_to((store.root()/'dubbing-staging').resolve()) and path.exists():shutil.rmtree(path)
         if job['kind']=='voice_sample':
             path=(store.root()/'voice-staging'/job['id']).resolve()
             if path.is_relative_to((store.root()/'voice-staging').resolve()) and path.exists():shutil.rmtree(path)

@@ -10,14 +10,20 @@ from . import store
 class ProviderError(ValueError):
     pass
 
+DEFAULT_TTS={'kind':'tts','protocol':'openai','endpoint':'http://127.0.0.1:8001/v1','model':'vieneu-v3-turbo','key_env':''}
+
 
 def configured(kind, *, require_model=True):
     with store.connect() as db:
         row=db.execute('SELECT providers FROM settings WHERE id=1').fetchone()
     providers=json.loads(row[0]) if row else []
     selected=next((p for p in providers if p['kind']==kind),None)
+    if not selected and kind=='tts':selected=dict(DEFAULT_TTS)
     if not selected or (require_model and not selected.get('model')):
-        raise ProviderError('Hãy cấu hình endpoint và model cho nhóm này trong Cài đặt.')
+        label={'asr':'ASR (Whisper/faster-whisper hoặc API nhận dạng)','translation':'Dịch thuật (Ollama hoặc LLM OpenAI-compatible)','tts':'Giọng đọc (TTS)'}[kind]
+        raise ProviderError(f'Chưa cấu hình {label}. Mở Cài đặt → nhóm tương ứng. VieNeu chỉ tạo giọng, không nhận dạng hay dịch phụ đề.')
+    if kind!='tts' and 'vieneu' in selected.get('model','').lower():
+        raise ProviderError('VieNeu chỉ dùng cho Giọng đọc (TTS). Dịch thuật cần Ollama/LLM; ASR cần Whisper hoặc provider nhận dạng. Hãy sửa đúng nhóm trong Cài đặt.')
     if selected.get('key_env') and not os.getenv(selected['key_env']):
         raise ProviderError('Chưa tìm thấy biến môi trường khóa đã chọn trong tiến trình xử lý.')
     return selected

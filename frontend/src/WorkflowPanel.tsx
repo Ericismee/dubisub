@@ -1,15 +1,16 @@
+import {httpError} from './httpError';
 import {useEffect,useState} from 'react';
 import {Icon} from './StudioParts';
 type Track={id:string;language:string;kind?:string;reviewed?:boolean;source_changed?:boolean;cues:{id:string;start_ms:number;end_ms:number;text:string}[]};
 type Props={projectId?:string;revision:number;target:string;trackId:string;tracks:Track[];assetId?:string;audioStreams:{index:number;tags?:{language?:string};codec_name?:string}[];glossary:Record<string,string>;locked:boolean;onRefresh:()=>Promise<void>;onConfigure:()=>void};
-async function send(path:string,body:unknown,method='POST'){const r=await fetch(path,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok)throw new Error(await r.text());return r.json();}
+async function send(path:string,body:unknown,method='POST'){const r=await fetch(path,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok)throw await httpError(r);return r.json();}
 export function WorkflowPanel(props:Props){
  const {projectId,revision,target,trackId,tracks,assetId,audioStreams,glossary,locked,onRefresh,onConfigure}=props;
  const [targets,setTargets]=useState(target),[source,setSource]=useState('auto'),[audio,setAudio]=useState('0'),[terms,setTerms]=useState(''),[busy,setBusy]=useState(false),[message,setMessage]=useState(''),[error,setError]=useState('');
  const selected=tracks.find(t=>t.id===trackId),glossaryText=JSON.stringify(glossary);
  useEffect(()=>setTargets(target),[target,projectId]);
  useEffect(()=>setTerms(Object.entries(glossary).map(([a,b])=>`${a} = ${b}`).join('\n')),[projectId,glossaryText]);
- async function run(action:()=>Promise<unknown>,success:string){setBusy(true);setError('');setMessage('');try{await action();await onRefresh();setMessage(success);}catch(e){setError(String(e));}finally{setBusy(false);}}
+ async function run(action:()=>Promise<unknown>,success:string){setBusy(true);setError('');setMessage('');try{await action();await onRefresh();setMessage(success);}catch(e){setError(e instanceof Error?e.message:String(e));}finally{setBusy(false);}}
  return <section className="workflow-panel"><div className="panel-heading"><h2>ASR & dịch phụ đề</h2><button className="icon-button" title="Cấu hình provider" aria-label="Cấu hình ASR và dịch" onClick={onConfigure}><Icon name="settings" size={16}/></button></div>
  <details><summary>Lấy lời thoại từ audio</summary><p>Gửi audio của nguồn đã chọn tới provider ASR bạn cấu hình. Chỉ chạy khi bạn bấm nhận dạng.</p><label>Ngôn ngữ nguồn<input aria-label="Ngôn ngữ ASR" value={source} onChange={e=>setSource(e.target.value)} placeholder="auto hoặc vi, en…"/></label><label>Track âm thanh<select value={audio} onChange={e=>setAudio(e.target.value)}>{audioStreams.map((s,i)=><option key={s.index} value={i}>Audio {i+1} · {s.tags?.language||'und'} · {s.codec_name}</option>)}</select></label><button disabled={!projectId||!assetId||!audioStreams.length||locked||busy} onClick={()=>void run(()=>send(`/api/projects/${projectId}/transcribe`,{asset_id:assetId,source_language:source,audio_stream:Number(audio)}),'Đã đưa ASR vào hàng đợi. Kết quả sẽ thành track mới.')}>Nhận dạng lời thoại</button></details>
  <label>Ngôn ngữ dịch đích<input aria-label="Ngôn ngữ dịch đích" value={targets} onChange={e=>setTargets(e.target.value)} placeholder="vi, en, ja"/></label><small>Mã BCP 47, phân tách bằng dấu phẩy. Tối đa 8 đích, mỗi đích có kết quả riêng.</small>
