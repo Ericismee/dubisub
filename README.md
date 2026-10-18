@@ -67,6 +67,7 @@ Local-first means local project/media storage. Selecting a remote AI provider se
 ## 🛠️ Development
 
 Prerequisites: Windows, uv, Node/npm, FFmpeg and FFprobe on PATH. Dependencies are local to this project; Python 3.12.13 is selected by `.python-version`.
+See the [English run guide](docs/RUNNING.en.md) or [hướng dẫn chạy bằng tiếng Việt](docs/RUNNING.vi.md) to start the backend API, worker, and frontend separately or together.
 
 ```powershell
 cd D:/WorkSpace/dubisub

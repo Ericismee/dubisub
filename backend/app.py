@@ -29,6 +29,12 @@ from .voices import router as voices_router
 app.include_router(voices_router)
 from .dubbing import router as dubbing_router
 app.include_router(dubbing_router)
+from .capabilities import router as capability_router
+app.include_router(capability_router)
+from .pipelines import router as pipeline_router
+app.include_router(pipeline_router)
+from .analysis import router as analysis_router
+app.include_router(analysis_router)
 
 
 @app.middleware('http')
@@ -96,11 +102,11 @@ class EditTrack(BaseModel):
 def health():
     with store.connect() as db:
         db.execute('SELECT 1')
-    return {'status': 'ok', 'product': 'DubiSub', 'schema_version': 3}
+    return {'status': 'ok', 'product': 'DubiSub', 'schema_version': 4}
 
 
 class ProviderConfig(BaseModel):
-    kind: Literal['asr', 'translation', 'tts']
+    kind: Literal['asr', 'translation', 'vision', 'tts']
     protocol: Literal['openai', 'ollama'] = 'openai'
     endpoint: str = Field(max_length=2048)
     model: str = Field(default='', max_length=160)
@@ -116,13 +122,13 @@ class ProviderConfig(BaseModel):
 
 
 class SettingsEdit(BaseModel):
-    providers: list[ProviderConfig] = Field(max_length=3)
+    providers: list[ProviderConfig] = Field(max_length=4)
 
 
 @app.put('/api/settings')
 def update_settings(body: SettingsEdit):
-    if any(p.protocol=='ollama' and p.kind!='translation' for p in body.providers):
-        raise HTTPException(422, 'Ollama protocol supports translation only')
+    if any(p.protocol=='ollama' and p.kind not in ('translation','vision') for p in body.providers):
+        raise HTTPException(422, 'Ollama supports LLM/vision roles only')
     if len({p.kind for p in body.providers}) != len(body.providers):
         raise HTTPException(422, 'Only one configuration per provider kind')
     with store.connect() as db:
@@ -225,6 +231,8 @@ def read(project_id: str):
             if track.get('source_track_id'):
                 source=next((t for t in document['tracks'] if t['id']==track['source_track_id']),None)
                 track['source_changed']=not source or fingerprint(source['cues'])!=track.get('source_hash')
+        from .analysis import source_current
+        for analysis in document.get('analyses',{}).values():analysis['source_changed']=not source_current(document,analysis)
         document['assets'] = [dict(r) for r in db.execute(
             "SELECT id,filename,kind,checksum,metadata FROM assets WHERE project_id=? AND kind NOT IN ('remote','generated')", (project_id,))]
         document['jobs'] = [dict(r) for r in db.execute(
@@ -360,7 +368,8 @@ def edit(project_id: str, track_id: str, body: EditTrack):
         track = next((t for t in doc['tracks'] if t['id'] == track_id), None)
         if track is None:
             raise KeyError(track_id)
-        track['cues'] = cues
+        previous={c['id']:c for c in track['cues']}
+        track['cues'] = [{**previous[c['id']],**c} if c['id'] in previous and all(previous[c['id']][k]==c[k] for k in ('text','start_ms','end_ms')) else c for c in cues]
         track['reviewed'] = False
         store.save(db, doc)
     return doc

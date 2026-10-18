@@ -33,7 +33,7 @@ def migrate():
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
         version=db.execute('PRAGMA user_version').fetchone()[0]
-        if version>3:
+        if version>4:
             raise RuntimeError('Database schema is newer than this application')
         if version<1:
             db.execute('CREATE TABLE projects(id TEXT PRIMARY KEY, document TEXT NOT NULL)')
@@ -45,7 +45,10 @@ def migrate():
             db.execute('CREATE TABLE link_imports(id TEXT PRIMARY KEY REFERENCES assets(id), url TEXT NOT NULL, inspection TEXT)')
             db.execute('CREATE TABLE asset_origins(asset_id TEXT PRIMARY KEY REFERENCES assets(id), source_url TEXT NOT NULL, imported_at REAL NOT NULL, language TEXT NOT NULL, automatic INTEGER NOT NULL)')
             db.execute("ALTER TABLE jobs ADD COLUMN payload TEXT NOT NULL DEFAULT '{}'")
-        db.execute('PRAGMA user_version=3')
+        if version<4:
+            db.execute('CREATE TABLE provider_checks(signature TEXT PRIMARY KEY, document TEXT NOT NULL)')
+            db.execute('CREATE TABLE pipelines(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), document TEXT NOT NULL)')
+        db.execute('PRAGMA user_version=4')
 
 
 def project(db, project_id):

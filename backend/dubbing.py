@@ -130,6 +130,7 @@ class Narration(BaseModel):
         return langcodes.standardize_tag(value)
     revision:int
     track_id:str|None=None
+    analysis_id:str|None=None
     text:str=Field(default='',max_length=300)
     voice:Voice
     speakers:dict[str,Voice]=Field(default_factory=dict,max_length=30)
@@ -142,6 +143,7 @@ class Narration(BaseModel):
 
 @router.post('/projects/{pid}/narrations',status_code=202)
 def narration(pid:str,body:Narration):
+    if body.analysis_id and body.track_id:raise HTTPException(422,'Chọn kịch bản hoặc track phụ đề, không chọn cả hai.')
     provider=configured('tts')
     if not body.transfer_confirmed:raise HTTPException(422,'Xác nhận gửi văn bản và đoạn giọng mẫu tới provider được hiển thị.')
     if body.provider_fingerprint!=fingerprint(provider):raise HTTPException(409,'Cấu hình TTS đã thay đổi. Kiểm tra lại VieNeu/provider và xác nhận truyền dữ liệu cho cấu hình mới.')
@@ -154,7 +156,18 @@ def narration(pid:str,body:Narration):
         if db.execute("SELECT id FROM jobs WHERE project_id=? AND kind='narrate' AND state IN ('queued','running')",(pid,)).fetchone():raise HTTPException(409,'Dự án đang tạo lời đọc. Chờ hoàn tất hoặc hủy trước khi tạo tiếp.')
         track=next((t for t in doc['tracks'] if t['id']==body.track_id),None)
         if body.track_id and not track:raise HTTPException(422,'Không tìm thấy track.')
-        if track:
+        review=None
+        if body.analysis_id:
+            review=doc.get('analyses',{}).get(body.analysis_id)
+            if not review or review['kind'] not in ('review','summary','describe') or not review['reviewed']:raise HTTPException(422,'Chọn kịch bản đã duyệt trước khi tạo lời dẫn.')
+            if review.get('language','und').split('-')[0]!='vi':raise HTTPException(422,'Adapter lời dẫn hiện chỉ bật tiếng Việt.')
+            if review.get('source_track_id'):
+                original=next((t for t in doc['tracks'] if t['id']==review['source_track_id']),None)
+                if not original or fingerprint(original['cues'])!=review['source_hash']:raise HTTPException(409,'Transcript đã đổi; phân tích và duyệt lại kịch bản.')
+            # Input contains source evidence, never invented output timestamps.
+            cues=[{'id':r['id'],'text':r['text'],'start_ms':min(t['start_ms'] for t in r['source_ranges']),'end_ms':max(t['end_ms'] for t in r['source_ranges']),'source_ranges':r['source_ranges']} for r in review['items']]
+        elif track:
+            if track.get('kind')=='review':raise HTTPException(422,'Sửa và đọc lại kịch bản gốc để tạo lại timeline review; không dùng lại timing review như nguồn.')
             if track['language']!='und' and track['language'].split('-')[0].lower()!='vi':raise HTTPException(422,'Adapter đã xác minh hiện chỉ bật tiếng Việt (vi).')
             if track.get('kind') in ('translation','asr') and not track.get('reviewed'):raise HTTPException(422,'Duyệt nội dung ASR/bản dịch trước khi tạo giọng.')
             if track.get('source_track_id'):
@@ -185,7 +198,7 @@ def narration(pid:str,body:Narration):
         if body.track_id:
             doc.setdefault('narration_settings',{})[body.track_id]={'voice':body.voice.model_dump(),'speakers':{k:v.model_dump() for k,v in body.speakers.items()},'cue_speakers':body.cue_speakers,'language':body.language}
             store.save(db,doc)
-        jid=store.uid();payload={**body.model_dump(),'provider':provider,'profiles':profiles,'cues':cues,'source_revision':doc['revision'],'language':body.language,'source_duration_ms':source_duration_ms}
+        jid=store.uid();payload={**body.model_dump(),'provider':provider,'profiles':profiles,'cues':cues,'source_revision':doc['revision'],'language':body.language,'source_duration_ms':source_duration_ms,'review_hash':fingerprint(review) if review else None}
         db.execute("INSERT INTO jobs(id,project_id,asset_id,kind,payload) VALUES(?,?,?,'narrate',?)",(jid,pid,aid,json.dumps(payload)))
     return {'job_id':jid}
 
@@ -252,6 +265,10 @@ def execute(job,command):
     with store.connect() as db:
         current=store.project(db,job['project_id'])
     if any(pid not in current.get('voice_profiles',{}) for pid in payload['profiles']):raise ProviderError('Hồ sơ giọng đã bị xóa; không thể thử lại tác vụ dùng hồ sơ đó.')
+    if payload.get('analysis_id'):
+        from .analysis import source_current
+        analysis=current.get('analyses',{}).get(payload['analysis_id'])
+        if fingerprint(analysis)!=payload['review_hash'] or not source_current(current,analysis):raise ProviderError('Kịch bản/transcript đã đổi; tạo tác vụ lời dẫn mới để giữ phiên bản đúng.')
     provider=payload['provider'];capability(provider);registered={};segments=[]
     cache=store.root()/'dubbing-cache';cache.mkdir(exist_ok=True)
     preset_ids={v['id'] for v in catalog(provider) if 'vi' in v['languages']}
@@ -270,6 +287,9 @@ def execute(job,command):
             generated=synthesize(job,command,provider,voice_id,cue['text'],directory);active(job);generated.replace(final)
         with wave.open(str(final),'rb') as audio:duration_ms=round(audio.getnframes()/audio.getframerate()*1000)
         item={**cue,'cache_key':key,'duration_ms':duration_ms,'overflow_ms':max(0,duration_ms-(cue['end_ms']-cue['start_ms'])),'speaker':speaker or 'default','voice':voice,'profile_id':profile_id,'overlap':False}
+        if payload.get('analysis_id'):
+            output_start=segments[-1]['output_end_ms'] if segments else 0
+            item.update(start_ms=output_start,end_ms=output_start+duration_ms,output_end_ms=output_start+math.ceil(duration_ms/40)*40,overflow_ms=0)
         segments.append(item)
         try:
             with store.connect() as db:
@@ -281,7 +301,10 @@ def execute(job,command):
         s['overlap']=any(i!=j and s['start_ms']<t['start_ms']+t['duration_ms'] and t['start_ms']<s['start_ms']+s['duration_ms'] for j,t in enumerate(segments))
     output=directory/'narration.wav';mix(segments,output,job)
     video=directory/'narration.mp4'
-    if payload['export_video']:
+    if payload['export_video'] and payload.get('analysis_id'):
+        from .review_render import render
+        render(job,command,segments,output,video,directory,payload['source_duration_ms'])
+    elif payload['export_video']:
         video_cap=min(int(os.getenv('DUBISUB_MAX_UPLOAD_MB','2048'))*1024**2,shutil.disk_usage(directory).free-128*1024**2)
         if video_cap<=0:raise ProviderError('Không đủ đĩa để xuất MP4.')
         command([os.getenv('DUBISUB_FFMPEG','ffmpeg'),'-v','error','-nostdin','-protocol_whitelist','file,pipe','-format_whitelist','mov,matroska,webm,avi,mp3,wav,flac,ogg,mpegts,mpeg,aac','-i',job['path'],'-i',str(output),'-map','0:v:0','-map','1:a:0','-c:v','libx264','-preset','veryfast','-threads','2','-c:a','aac','-movflags','+faststart','-fs',str(video_cap),'-y',str(video)],job,timeout=10800)
@@ -293,10 +316,14 @@ def execute(job,command):
     try:
         with store.connect() as db:
             db.execute('BEGIN IMMEDIATE');active(job);doc=store.project(db,job['project_id'])
+            if payload.get('analysis_id') and (fingerprint(doc.get('analyses',{}).get(payload['analysis_id']))!=payload['review_hash'] or not source_current(doc,doc.get('analyses',{}).get(payload['analysis_id']))):raise ProviderError('Kịch bản/transcript đã đổi trong khi tạo lời dẫn; chưa lưu kết quả lỗi thời.')
             for ext,path in [('wav',output),('mp4',video)]:
                 if path.exists():
                     target=destination/f"{job['id']}.{ext}";path.replace(target);moved.append(target)
             item={'id':job['id'],'track_id':payload['track_id'],'source_revision':payload['source_revision'],'segments':segments,'profile_ids':list(payload['profiles']),'video':payload['export_video'],'created_at':time.time()}
+            if payload.get('analysis_id'):
+                tid=store.uid();item.update(track_id=tid,analysis_id=payload['analysis_id'])
+                doc['tracks'].append({'id':tid,'asset_id':job['asset_id'],'kind':'review','language':payload['language'],'reviewed':True,'analysis_id':payload['analysis_id'],'job_id':job['id'],'cues':[{'id':s['id'],'text':s['text'],'start_ms':s['start_ms'],'end_ms':s['end_ms']} for s in segments]})
             doc.setdefault('dubbings',[]).append(item);store.save(db,doc);db.execute("UPDATE jobs SET state='succeeded',progress=100,error=NULL WHERE id=?",(job['id'],))
     except BaseException:
         for path in moved:path.unlink(missing_ok=True)

@@ -27,7 +27,7 @@ def command(args, job, timeout=120, cwd=None):
             while process.poll() is None:
                 with store.connect() as db:
                     updated = db.execute("UPDATE jobs SET heartbeat=? WHERE id=? AND owner=? AND state='running'",
-                                         (time.time(), job['id'], OWNER)).rowcount
+                                         (time.time(), job['id'], job.get('owner',OWNER))).rowcount
                 if not updated:
                     raise Canceled()
                 if time.monotonic() - started > timeout:
@@ -105,6 +105,10 @@ def finish_link(job, result):
 
 
 def run_once(*, link_executor=None):
+    from .pipelines import tick
+    tick()
+    from .capabilities import run_probe
+    if run_probe(OWNER):return True
     with store.connect() as db:
         db.execute('BEGIN IMMEDIATE')
         db.execute("UPDATE jobs SET state=CASE WHEN attempts<3 THEN 'queued' ELSE 'failed' END,error='Recovered interrupted worker' WHERE state='running' AND heartbeat<?", (time.time()-30,))
@@ -123,6 +127,14 @@ def run_once(*, link_executor=None):
             except Exception:pass
     thread=threading.Thread(target=heartbeat,daemon=True);thread.start()
     try:
+        if job['kind'] in ('vision','analyze'):
+            result=json.loads(command([sys.executable,'-m','backend.analysis',job['id']],job,timeout=10800))
+            if result.get('error'):raise ValueError(result['error'])
+            return True
+        if job['kind']=='auto_export':
+            from .pipelines import export_job
+            export_job(job)
+            return True
         if job['kind'] in ('voice_extract','narrate'):
             from .dubbing import execute
             execute(job,command)
@@ -143,9 +155,15 @@ def run_once(*, link_executor=None):
                 directory=store.root()/'ai-staging'/job['id'];directory.mkdir(parents=True,exist_ok=True)
                 if shutil.disk_usage(directory).free<duration*32000+128*1024**2:raise ValueError('Không đủ đĩa để tạo audio phục vụ ASR.')
                 payload=json.loads(job['payload'])
-                command([os.getenv('DUBISUB_FFMPEG','ffmpeg'),'-v','error','-nostdin','-protocol_whitelist','file,pipe','-format_whitelist',FORMATS,
-                         '-i',job['path'],'-map',f'0:a:{payload["audio_stream"]}','-vn','-ac','1','-ar','16000','-c:a','pcm_s16le',
-                         '-f','segment','-segment_time','600','-reset_timestamps','1','-y',str(directory/'chunk-%05d.wav')],job,timeout=1800)
+                offsets=[];deadline=time.monotonic()+1800
+                source_offset=payload.get('source_offset_ms',0)
+                for number,start in enumerate(range(0,max(1,round(duration*1000)-source_offset),590000)):
+                    remaining=deadline-time.monotonic()
+                    if remaining<=0:raise ValueError('Tách audio ASR đã hết thời gian.')
+                    command([os.getenv('DUBISUB_FFMPEG','ffmpeg'),'-v','error','-nostdin','-ss',str((start+source_offset)/1000),'-t','600','-protocol_whitelist','file,pipe','-format_whitelist',FORMATS,
+                             '-i',job['path'],'-map',f'0:a:{payload["audio_stream"]}','-vn','-ac','1','-ar','16000','-c:a','pcm_s16le','-y',str(directory/f'chunk-{number:05d}.wav')],job,timeout=remaining)
+                    offsets.append(start+source_offset)
+                (directory/'offsets.json').write_text(json.dumps(offsets))
             result=json.loads(command([sys.executable,'-m','backend.ai_tasks',job['id']],job,timeout=10800))
             if result.get('error'):raise ValueError(result['error'])
             return True
@@ -184,6 +202,9 @@ def run_once(*, link_executor=None):
             db.execute("UPDATE jobs SET state='failed',error=? WHERE id=? AND owner=? AND state='running'", (message[:250], job['id'], OWNER))
     finally:
         stop.set();thread.join(timeout=1)
+        if job['kind'] in ('vision','analyze'):
+            path=(store.root()/'analysis-staging'/job['id']).resolve()
+            if path.is_relative_to((store.root()/'analysis-staging').resolve()) and path.exists():shutil.rmtree(path)
         if job['kind'] in ('voice_extract','narrate'):
             path=(store.root()/'dubbing-staging'/job['id']).resolve()
             if path.is_relative_to((store.root()/'dubbing-staging').resolve()) and path.exists():shutil.rmtree(path)

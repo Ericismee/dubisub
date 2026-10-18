@@ -34,7 +34,18 @@ def provider(tmp_path,monkeypatch):
             if self.path.endswith('/transcriptions'):
                 state['requests'].append({'asr':True,'has_wav':b'RIFF' in raw,'iso_language':b'\r\nvi\r\n' in raw})
                 self.respond({'segments':[{'start':.1,'end':.7,'text':'ASR fixture: Xin chÃ o'}]});return
-            body=json.loads(raw);data=json.loads(body['messages'][1]['content']);state['requests'].append(data)
+            body=json.loads(raw)
+            content=body['messages'][-1]['content']
+            if isinstance(content,str) and content.startswith('Return JSON only: '):
+                value=json.loads(content.removeprefix('Return JSON only: '));self.respond({'choices':[{'message':{'content':json.dumps(value)}}]});return
+            if isinstance(content,list):
+                data=json.loads(content[0]['text']);state['requests'].append({'vision':True,'frames':data['frames']})
+                value={'items':[{'text':'Fixture: visible test pattern','evidence_ids':list(data['frames'])}]}
+                self.respond({'choices':[{'message':{'content':json.dumps(value)}}]});return
+            data=json.loads(content);state['requests'].append(data)
+            if 'evidence' in data:
+                value={'items':[{'text':'Fixture summary only','evidence_ids':list(data['evidence'])[:2]}]}
+                self.respond({'choices':[{'message':{'content':json.dumps(value)}}]});return
             if state['fail_batch'] and len(data['cues'])<20:
                 state['fail_batch']=False;self.respond({'error':'fixture'},500);return
             cues=[{'id':c['id'],'text':f'fixture-{data["target_language"]}: '+c['text']} for c in data['cues']]
@@ -111,6 +122,11 @@ def test_asr_real_audio_iso_language_and_manual_track(provider):
     worker.run_once();p=client.get('/api/projects/'+pid).json()
     assert p['jobs'][-1]['state']=='succeeded',p['jobs']
     assert p['tracks'][0]['cues'][0]['start_ms']==100 and p['tracks'][0]['cues'][0]['end_ms']==700
+    track=p['tracks'][0];original=client.get(f'/api/projects/{pid}/tracks/{track["id"]}/asr-original').json()['cues']
+    edited=[{**c,'text':'User correction'} for c in track['cues']]
+    client.put(f'/api/projects/{pid}/tracks/{track["id"]}',json={'revision':p['revision'],'cues':edited})
+    assert client.get(f'/api/projects/{pid}/tracks/{track["id"]}/asr-original').json()['cues']==original
+    p=client.get('/api/projects/'+pid).json()
     assert state['requests'][0]['has_wav'] and state['requests'][0]['iso_language']
     r=client.post(f'/api/projects/{pid}/tracks',json={'revision':p['revision'],'language':'ja'})
     assert r.status_code==201

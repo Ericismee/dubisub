@@ -10,6 +10,14 @@ from .providers import configured, check_models, ProviderError
 
 router=APIRouter(prefix='/api')
 
+@router.get('/projects/{project_id}/tracks/{track_id}/asr-original')
+def asr_original(project_id:str,track_id:str):
+    from fastapi.responses import Response
+    with store.connect() as db:doc=store.project(db,project_id)
+    track=next((t for t in doc['tracks'] if t['id']==track_id),None)
+    if not track or 'raw_cues' not in track:raise KeyError(track_id)
+    return Response(json.dumps({'language':track['language'],'cues':track['raw_cues']},ensure_ascii=False,indent=2),media_type='application/json',headers={'Content-Disposition':'attachment; filename="dubisub-asr-original.json"'})
+
 @router.get('/provider-catalog')
 def provider_catalog():
     from .providers import MODEL_FAMILIES
@@ -101,6 +109,7 @@ def render(project_id:str,body:Render):
         if doc['revision']!=body.revision:raise HTTPException(409,'Dự án vừa thay đổi.')
         track=next((t for t in doc['tracks'] if t['id']==body.track_id),None)
         if body.burn_subtitles and not track:raise HTTPException(422,'Chọn track để gắn phụ đề.')
+        if body.burn_subtitles and track.get('kind')=='review':raise HTTPException(422,'Phụ đề review dùng timeline lời dẫn mới; không gắn vào video nguồn. Tải video ở phần Lời dẫn/review.')
         if body.burn_subtitles and track.get('kind') in ('translation','asr') and not track.get('reviewed'):
             raise HTTPException(422,'Hãy duyệt track ASR/bản dịch trước khi gắn vào video.')
         if body.burn_subtitles and track.get('kind')=='translation':
@@ -126,7 +135,7 @@ def create_track(project_id:str,body:NewTrack):
 
 
 @router.post('/providers/{kind}/check')
-def provider_check(kind:Literal['asr','translation','tts']):
+def provider_check(kind:Literal['asr','translation','vision','tts']):
     try:return check_models(configured(kind,require_model=False))
     except ProviderError as exc:raise HTTPException(422,str(exc)) from None
 
@@ -150,6 +159,7 @@ def translate(project_id:str,body:Translate):
         if doc['revision']!=body.revision:raise HTTPException(409,'Phụ đề đã thay đổi. Hãy lưu và mở lại trước khi dịch.')
         source=next((t for t in doc['tracks'] if t['id']==body.track_id),None)
         if not source or not source['cues']:raise HTTPException(422,'Chọn một track phụ đề có nội dung.')
+        if source.get('kind') in ('review','description'):raise HTTPException(422,'Luồng dịch lời thoại không nhận track review/caption AI. Dịch kịch bản cần giữ loại nội dung và timeline riêng.')
         for language in body.target_languages:
             if language==source.get('language'):raise HTTPException(422,'Đích phải khác ngôn ngữ track nguồn.')
             existing=db.execute("SELECT id FROM jobs WHERE project_id=? AND kind='translate' AND state IN ('queued','running') AND json_extract(payload,'$.source.id')=? AND json_extract(payload,'$.target_language')=?",(project_id,source['id'],language)).fetchone()

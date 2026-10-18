@@ -1,6 +1,7 @@
 """Explicit OpenAI-compatible HTTP adapter; no model/key/voices are assumed."""
 import json
 import os
+import hashlib
 from urllib.parse import urlsplit
 
 import httpx
@@ -20,7 +21,7 @@ def configured(kind, *, require_model=True):
     selected=next((p for p in providers if p['kind']==kind),None)
     if not selected and kind=='tts':selected=dict(DEFAULT_TTS)
     if not selected or (require_model and not selected.get('model')):
-        label={'asr':'ASR (Whisper/faster-whisper hoặc API nhận dạng)','translation':'Dịch thuật (Ollama hoặc LLM OpenAI-compatible)','tts':'Giọng đọc (TTS)'}[kind]
+        label={'asr':'ASR (Whisper/faster-whisper hoặc API nhận dạng)','translation':'LLM (Ollama hoặc OpenAI-compatible)','vision':'Vision (model có khả năng đọc ảnh)','tts':'Giọng đọc (TTS)'}[kind]
         raise ProviderError(f'Chưa cấu hình {label}. Mở Cài đặt → nhóm tương ứng. VieNeu chỉ tạo giọng, không nhận dạng hay dịch phụ đề.')
     if kind!='tts' and 'vieneu' in selected.get('model','').lower():
         raise ProviderError('VieNeu chỉ dùng cho Giọng đọc (TTS). Dịch thuật cần Ollama/LLM; ASR cần Whisper hoặc provider nhận dạng. Hãy sửa đúng nhóm trong Cài đặt.')
@@ -78,7 +79,11 @@ def ollama_config(config):
     return result
 
 
-def chat_json(config, messages):
+def chat_json(config, messages, images=None):
+    messages=[dict(m) for m in messages]
+    if images:
+        if config.get('protocol')=='ollama':messages[-1]['images']=images
+        else:messages[-1]['content']=[{'type':'text','text':messages[-1]['content']}]+[{'type':'image_url','image_url':{'url':'data:image/jpeg;base64,'+value}} for value in images]
     if config.get('protocol')=='ollama':
         response=request(ollama_config(config),'api/chat',body={'model':config['model'],'messages':messages,'stream':False,'format':'json','options':{'temperature':0.1,'num_predict':4096}})
         try:return json.loads(response['message']['content'])
@@ -86,6 +91,10 @@ def chat_json(config, messages):
     response=request(config,'chat/completions',body={'model':config['model'],'messages':messages,'temperature':0.1,'max_tokens':4096,'response_format':{'type':'json_object'}})
     try:return json.loads(response['choices'][0]['message']['content'])
     except (KeyError,TypeError,IndexError,ValueError):raise ProviderError('Provider không trả cấu trúc chat/JSON hợp lệ.') from None
+
+def signature(config):
+    value={k:config.get(k,'openai' if k=='protocol' else '') for k in ('endpoint','protocol','model','key_env')}
+    return hashlib.sha256(json.dumps(value,sort_keys=True).encode()).hexdigest()
 
 
 # Suggestions only: installation, hardware suitability and translation quality are not inferred.
