@@ -28,6 +28,8 @@ def catalog(provider):
     result=[]
     for item in rows:
         if not isinstance(item,dict) or not isinstance(item.get('id'),str) or not 0<len(item['id'])<=160:continue
+        # User-enrolled references are project-scoped in DubiSub, never global presets.
+        if item['id'].startswith('dubisub_'):continue
         languages=item.get('languages') or ([item['language']] if item.get('language') else ['vi'] if vieneu else [])
         if isinstance(languages,str):languages=[languages]
         if not isinstance(languages,list):raise ProviderError('Metadata ngôn ngữ giọng không hợp lệ.')
@@ -82,33 +84,38 @@ def audio(project_id:str,sample_id:str):
     return FileResponse(path,media_type='audio/wav')
 
 
+def synthesize(job,command,provider,voice_id,text,directory):
+    headers={'Accept':'audio/wav'}
+    if provider.get('key_env'):
+        value=os.getenv(provider['key_env'])
+        if not value:raise ProviderError('Worker chưa có khóa của provider TTS.')
+        headers['Authorization']='Bearer '+value
+    try:
+        with httpx.Client(trust_env=False,follow_redirects=False,timeout=180) as client:
+            with client.stream('POST',provider['endpoint'].rstrip('/')+'/audio/speech',headers=headers,json={'model':provider['model'],'voice':voice_id,'input':text,'response_format':'wav'}) as response:
+                if response.status_code!=200:raise ProviderError(f'TTS trả HTTP {response.status_code}. Không tự đổi giọng/model.')
+                raw=directory/'provider.wav';size=0
+                with raw.open('wb') as output:
+                    for chunk in response.iter_bytes(65536):
+                        size+=len(chunk)
+                        if size>20*1024**2 or shutil.disk_usage(directory).free<128*1024**2:raise ProviderError('Mẫu giọng vượt giới hạn hoặc không đủ đĩa.')
+                        with store.connect() as db:
+                            if not db.execute("SELECT id FROM jobs WHERE id=? AND state='running' AND owner=?",(job['id'],job['owner'])).fetchone():raise ProviderError('Đã hủy tạo mẫu giọng.')
+                        output.write(chunk)
+        normalized=directory/'sample.wav'
+        command([os.getenv('DUBISUB_FFMPEG','ffmpeg'),'-v','error','-nostdin','-f','wav','-i',str(raw),'-t','180','-ac','1','-ar','48000','-c:a','pcm_s16le','-y',str(normalized)],job)
+        meta=json.loads(command([os.getenv('DUBISUB_FFPROBE','ffprobe'),'-v','error','-show_format','-of','json',str(normalized)],job))
+        if not 0<float(meta['format']['duration'])<180:raise ProviderError('Mẫu TTS không chứa audio hợp lệ hoặc quá dài.')
+    except httpx.HTTPError:raise ProviderError('Không kết nối được TTS hoặc stream bị gián đoạn.') from None
+    return normalized
+
+
 def execute(job,command):
     payload=json.loads(job['payload']);provider=payload['provider'];key=payload['cache_key']
     directory=store.root()/'voice-staging'/job['id'];directory.mkdir(parents=True,exist_ok=True)
     final=store.root()/'voice-cache'/f'{key}.wav';final.parent.mkdir(exist_ok=True)
     if not final.is_file():
-        headers={'Accept':'audio/wav'}
-        if provider.get('key_env'):
-            value=os.getenv(provider['key_env'])
-            if not value:raise ProviderError('Worker chưa có khóa của provider TTS.')
-            headers['Authorization']='Bearer '+value
-        try:
-            with httpx.Client(trust_env=False,follow_redirects=False,timeout=180) as client:
-                with client.stream('POST',provider['endpoint'].rstrip('/')+'/audio/speech',headers=headers,json={'model':provider['model'],'voice':payload['voice_id'],'input':payload['text'],'response_format':'wav'}) as response:
-                    if response.status_code!=200:raise ProviderError(f'TTS trả HTTP {response.status_code}. Không tự đổi giọng/model.')
-                    raw=directory/'provider.wav';size=0
-                    with raw.open('wb') as output:
-                        for chunk in response.iter_bytes(65536):
-                            size+=len(chunk)
-                            if size>20*1024**2 or shutil.disk_usage(directory).free<128*1024**2:raise ProviderError('Mẫu giọng vượt giới hạn hoặc không đủ đĩa.')
-                            with store.connect() as db:
-                                if not db.execute("SELECT id FROM jobs WHERE id=? AND state='running' AND owner=?",(job['id'],job['owner'])).fetchone():raise ProviderError('Đã hủy tạo mẫu giọng.')
-                            output.write(chunk)
-            normalized=directory/'sample.wav'
-            command([os.getenv('DUBISUB_FFMPEG','ffmpeg'),'-v','error','-nostdin','-f','wav','-i',str(raw),'-t','180','-ac','1','-ar','48000','-c:a','pcm_s16le','-y',str(normalized)],job)
-            meta=json.loads(command([os.getenv('DUBISUB_FFPROBE','ffprobe'),'-v','error','-show_format','-of','json',str(normalized)],job))
-            if not 0<float(meta['format']['duration'])<180:raise ProviderError('Mẫu TTS không chứa audio hợp lệ hoặc quá dài.')
-        except httpx.HTTPError:raise ProviderError('Không kết nối được TTS hoặc stream bị gián đoạn.') from None
+        normalized=synthesize(job,command,provider,payload['voice_id'],payload['text'],directory)
     with store.connect() as db:
         db.execute('BEGIN IMMEDIATE')
         if not db.execute("SELECT id FROM jobs WHERE id=? AND state='running' AND owner=?",(job['id'],job['owner'])).fetchone():raise ProviderError('Tác vụ đã hủy.')

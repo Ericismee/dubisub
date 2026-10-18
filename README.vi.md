@@ -22,7 +22,9 @@ Các tính năng trên là kế hoạch phát triển; xem [trạng thái thực
 
 ## 🚀 Bắt đầu phát triển
 
-Yêu cầu: Windows, uv, Node/npm, FFmpeg và FFprobe trong PATH. Chạy:
+Yêu cầu: Windows, uv, Node/npm, FFmpeg và FFprobe trong PATH.
+
+Xem [hướng dẫn chạy bằng tiếng Việt](docs/RUNNING.vi.md) hoặc [English run guide](docs/RUNNING.en.md) để khởi động API backend, worker và frontend riêng hoặc cùng nhau. Chạy:
 
 ```powershell
 cd D:/WorkSpace/dubisub

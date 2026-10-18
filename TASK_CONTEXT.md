@@ -1,37 +1,28 @@
-# Active task context
+# DubiSub — active context
 
-## Objective and confirmed scope
-Build DubiSub: independent multilingual video/subtitle translation and video editor, Vietnamese default, selectable review and full translation/dubbing modes. `PROJECT_BRIEF.vi.md` section 12 takes precedence. No new idea/approval loop; local implementation authorized, no publication or external messaging.
+## Objective / rules
+Independent multilingual video/subtitle studio, Vietnamese default; translation/full dubbing and review. Latest user request: Auto transcript→translation/sub export, evidence-linked vision/summary/review, integrated VieNeu reference voices; clearer light UI/configuration. Implement runnable milestones A–D, no new idea/approval loop. PROJECT_BRIEF.vi.md section12 takes precedence. Root D:/WorkSpace/dubisub; repo ericismee/dubisub. Never touch NotebookE or its secrets/processes. Preserve user edits; no fake AI output or silent provider/voice fallback. Earlier user authorizes push to suitable branch without codex/; do not auto merge.
 
-## Workspace and decisions
-- Verified root: `D:/WorkSpace/dubisub`; old names Film Review Studio/VioraCut. Target `ericismee/dubisub`. Preserve existing MIT license, brand assets and user changes. Do not touch NotebookE or read its secrets.
-- React/TypeScript/Vite; FastAPI; SQLite WAL/migrations; separate durable worker; FFmpeg/FFprobe. Python 3.12.13 selected locally by uv; dependencies pinned in `pyproject.toml`, `uv.lock`, `frontend/package.json`, `frontend/package-lock.json`.
-- UI 3600/API 6060 loopback, start script refuses occupied ports. Data defaults to `./data`, environment variables referenced by `.env.example` (not auto-loaded).
+## Architecture / entrypoints
+React/TS/Vite, FastAPI, SQLite WAL schema4, durable worker, FFmpeg/FFprobe, safe yt-dlp adapter. Existing upload/link/provider/ASR/translation/dubbing/render modules reused. Core: backend/app.py, store.py, worker.py, providers.py, ai_tasks.py, dubbing.py, rendering.py. New: capabilities.py, pipelines.py, analysis.py, review_render.py; frontend AutoWizard.tsx/AnalysisPanel.tsx plus existing settings/workflow/dubbing panels. Documentation: docs/STATUS.md, docs/AUTO_WORKFLOWS.vi.md, docs/VOICE_CLONING.vi.md.
 
-## Current state and evidence
-M1 local foundation runs: create/reopen, upload/probe, embedded text-sub extraction, subtitle edit/autosave/session undo-redo, native preview/seek and actual SRT/VTT downloads. Provider settings persist configuration only, capabilities unverified; no AI/key prerequisites for M1.
+## Implemented / verified
+Foundation, safe URL imports, immutable media, stable subtitle IDs, Unicode/RTL editing/autosave/undo/export; projects edit/recoverable trash/library; single-source MP4; cached preset/reference VieNeu narration and per-character voices. Prior reference-cloning smoke used permitted synthetic voice, not human similarity evaluation.
+Auto baseline: disclosure/consent, capability checks, source-track priority/ASR fallback, multiple target languages, durable child jobs, cancel/retry/checkpoint/invalidation, actual sub exports. ASR overlap and raw_cues archive. Frame sampling and evidence-linked editable summary/review/description drafts, Markdown/JSON. Approved scripts→existing TTS→measured new review timeline and WAV/MP4; source timing remains separate; proper review preview, no source-render misuse. Smaller blurred chrome, clearer light labels/timeline, common edit SVG and workspace navigation.
+Tests:45 backend tests passed, frontend build and extended Playwright passed; later rechecks recorded in STATUS. Fixture AI is only protocol/timing proof. Live Qwen translation/sub exports and LLaVA frame+transcript→Qwen timecoded summary passed using generated media, reproducible scripts/check_ai_live.py. Live VieNeu review segments5280ms/3280ms→8560ms MP4 passed, test-results artifacts ignored by Git. LLaVA random color probes sometimes fail; no general accuracy promise.
 
-14 pytest tests passed with real FFmpeg fixtures; frontend type/build and npm audit (0 vulnerabilities) passed; Playwright/Edge real UI flow passed, including Unicode/RTL and reopen/export. Details and limitations: `docs/STATUS.md`; environment: `docs/SETUP_AUDIT.md`.
+## Current environment / prerequisites
+Open http://127.0.0.1:3600; API6060; start scripts/start.ps1, stop scripts/stop.ps1. Before restart check jobs queued/running and preserve them. Stop only workspace-recorded launcher; no other service restarts. Local Ollama11434 now running, discovered qwen2.5:7b, llava:latest, nomic-embed-text:latest. Production LLM fixed from erroneous VieNeu to Qwen local, prior provider refs backed up under ignored data; TTS retained VieNeu8001/vieneu-v3-turbo; Vision LLaVA added only if absent. No model downloads. ASR not ready: current selected nomic-embed-text:latest is embedding-only and now blocked by role validation; faster-whisper absent; do not claim real ASR verification.
 
-## Latest UI request
-Studio redesign completed with persistent media/preview/subtitle/export/timeline panels, white/black/violet styling inspired by the supplied ELG Labs page and editor screenshots. Use original assets in `assets` directly; never redraw/overwrite them. Native SVG cursors applied, text caret retained. New `frontend/src/StudioParts.tsx` contains icons, real source timeline and clear unavailable-feature panels. Extended E2E passed. Preview aspect changes do not render video; AI/editing/render milestones remain unfinished.
+## Limits / next work
+A works as baseline after source import; analysis/review stops for draft approval and TTS continuation is explicit. B frame-based/grouped baseline; no native-video or hierarchical whole-video reduction. C reference cloning/narration baseline, no automatic music/multispeaker detection, diarization, word alignment/background mixing. D first-evidence-scene/freeze-tail640x360/25fps review baseline, separate subtitles; no scene reorder UI or review burn-in. Remaining: real ASR, separate LLM proofreading, hierarchical summaries, scene editing, full one-run Auto→video, exhaustive failure/restart/long/disk QA. Finish latest checks/docs and push appropriate feature branch; never label complete spec.
 
-## Latest completed work
-- Project metadata edit and recoverable delete/restore; source media/cues retained, jobs canceled on delete.
-- Default dark UI, persistent theme/cursor choices, dedicated settings modal with Appearance/ASR/Translation/TTS/Storage groups.
-- M2 baseline URL import (YouTube and direct files), safe DNS-pinned transport for all extractor/download requests, worker progress/cancel/retry, subtitle selection and local audio/video merge. Schema v3. Live short YouTube sample inspect/download/probe succeeded; controlled HTTP video UI flow and backend policy tests passed.
-- New entrypoints: `backend/safe_http.py`, `backend/link_sources.py`, `backend/link_tasks.py`, `frontend/src/LinkImport.tsx`, `frontend/src/ProjectDialog.tsx`, `frontend/src/SettingsDialog.tsx`, `tests/test_links.py`. Test-only network exception: `tests/url_fixture_worker.py`, no production switch.
+## Preserve concurrent changes
+README.md, README.vi.md modified; docs/RUNNING.en.md and docs/RUNNING.vi.md untracked at turn start. Do not overwrite these unrelated edits; concurrent commit b076138 has now included them. Existing branch feat/vieneu-reference-dubbing at bd87f5b before Auto work. Concurrent commit b076138 already pushed the shared implementation and README/RUNNING edits during this turn; preserve it. Remaining changes are hardening/docs. Original brand assets and third-party skills untouched.
 
-## Next step
-Finish M2 hardening/thumbnail UX and longer imports. Current YouTube support excludes DRM/auth/playlist/live/manifest/JS-challenge sources; direct servers need HEAD. Keep test fixtures isolated and never weaken production network policy. M3 provider capability verification/ASR/translation; M4 timeline; M5 voices/review/dubbing. No live AI capability is currently claimed. Full crash/long-media/disk-exhaustion and full accessibility QA remain unverified.
-
-## Entry points
-`backend/app.py`, `backend/store.py`, `backend/worker.py`, `backend/subtitles.py`, `frontend/src/main.tsx`, `scripts/start.ps1`, `scripts/check_e2e.py`, `tests/test_foundation.py`, `README.vi.md`.
-
-Run: `uv sync --locked`; `npm ci --prefix frontend`; `powershell -ExecutionPolicy Bypass -File scripts/start.ps1`; open `http://127.0.0.1:3600`.
-
-
-## Latest 2026-10-18
-Implemented backend/providers.py, ai_tasks.py, workflows.py, rendering.py, voices.py plus WorkflowPanel/SubtitleTools/RenderPanel/VoicePanel. Durable ASR/translation with glossary, strict output validation/checkpoints; subtitle tools; single-source MP4 exports; real cached TTS samples; persistent trash. Ollama + OpenAI-compatible translation, 24-family suggestions separated from discovered installed tags. User requests >18 models like NotebookE; implementation is independent, no NotebookE access. Ollama CLI installed but port11434 unavailable; no model downloads. Live TTS one Vietnamese sample verified; LLM/ASR currently fixture-verified only. Full review/dubbing/multitrack still pending. See latest docs/STATUS.md. User authorizes commit/push to appropriate branch with no codex/ prefix.
-
-Latest link repair: actual long YouTube job remains running; do not restart/cancel it to deploy changes. Added bounded signed-URL refresh, transfer statistics and estimated sizes. Live short YouTube download/merge/probe passed. API transfer fields activate on next normal restart.
+## Commands
+uv run pytest -q
+npm run build --prefix frontend
+uv run python scripts/check_e2e.py (requires3600/6060 free; isolated fixture data)
+uv run python scripts/check_ai_live.py --llm-model qwen2.5:7b --vision-model llava:latest
+powershell -ExecutionPolicy Bypass -File scripts/start.ps1

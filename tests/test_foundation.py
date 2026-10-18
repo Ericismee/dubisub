@@ -29,7 +29,8 @@ def create(client):
 def test_edit_reopen_export_conflict(client):
     pid = create(client)
     assert client.get('/health').json()['status'] == 'ok'
-    assert client.get('/api/settings').json()['providers'] == []
+    defaults=client.get('/api/settings').json()['providers']
+    assert len(defaults)==1 and defaults[0]['kind']=='tts' and defaults[0]['model']=='vieneu-v3-turbo'
     assert client.post(f'/api/projects/{pid}/upload', data={'kind': 'subtitle'}, files={'file': ('đường dẫn có dấu.srt', SRT.encode())}).status_code == 202
     p = client.get(f'/api/projects/{pid}').json()
     assert p['target_language'] == 'vi-VN'
