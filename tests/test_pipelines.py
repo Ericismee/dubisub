@@ -31,10 +31,11 @@ def test_auto_priority_multilingual_exports(provider):
     plan=client.post(f'/api/projects/{p["id"]}/auto/plan',json={'revision':p['revision'],'track_id':p['tracks'][0]['id']}).json()
     assert plan['blockers'] and not state['requests']
     record(configured('translation'),'text','fixture_validation')
-    launch(client,p,targets=['vi','en'])
+    launch(client,p,targets=['vi','en'],context_note='Use consistent office relationships.')
     result=finish(client,p['id']);assert result['state']=='succeeded',result
     assert len(result['outputs'])==6
     assert not any(r.get('asr') for r in state['requests'])
+    assert all(r.get('context_note')=='Use consistent office relationships.' for r in state['requests'] if 'cues' in r)
     for f in result['outputs']:
         response=client.get(f'/api/projects/{p["id"]}/auto-exports/{f["job_id"]}/{f["track_id"]}/{f["format"]}')
         assert response.status_code==200 and 'fixture-' in response.text

@@ -18,7 +18,7 @@ from pydantic import BaseModel,Field,field_validator
 from . import store
 from .providers import configured,request,ProviderError
 from .voices import synthesize,catalog
-from .ai_tasks import fingerprint
+from .ai_tasks import fingerprint,context_current
 router=APIRouter(prefix='/api')
 
 def pcm_samples(data):
@@ -172,7 +172,7 @@ def narration(pid:str,body:Narration):
             if track.get('kind') in ('translation','asr') and not track.get('reviewed'):raise HTTPException(422,'Duyệt nội dung ASR/bản dịch trước khi tạo giọng.')
             if track.get('source_track_id'):
                 source=next((t for t in doc['tracks'] if t['id']==track['source_track_id']),None)
-                if not source or fingerprint(source['cues'])!=track.get('source_hash'):raise HTTPException(409,'Track nguồn đã thay đổi; cần dịch và duyệt lại.')
+                if not source or fingerprint(source['cues'])!=track.get('source_hash') or not context_current(doc,track):raise HTTPException(409,'Track nguồn đã thay đổi; cần dịch và duyệt lại.')
             cues=[c for c in track['cues'] if body.cue_ids is None or c['id'] in body.cue_ids]
             if body.cue_ids and set(body.cue_ids)!={c['id'] for c in cues}:raise HTTPException(422,'ID câu đã chọn không hợp lệ.')
         else:cues=[{'id':'text','start_ms':0,'end_ms':10000,'text':body.text}]

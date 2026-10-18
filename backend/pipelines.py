@@ -26,6 +26,7 @@ class Plan(BaseModel):
     spoiler:Literal['none','limited','full']='limited'
     target_duration_s:int=Field(default=60,ge=10,le=3600)
     condense:bool=False
+    context_note:str=Field(default='',max_length=1200)
     output:Literal['draft','subtitles','video']='draft'
     render_plan:dict=Field(default_factory=dict)
     confirmed:bool=False
@@ -157,6 +158,7 @@ def tick():
             if p['state']!='running':continue
             try:
                 doc=store.project(db,row['project_id']);plan=p['plan'];index=p['stage_index'];stage=p['stages'][index]
+                if plan.get('scenes') and fingerprint(doc.get('analyses',{}).get(plan['scenes']['id']))!=fingerprint(plan['scenes']):raise ValueError('Bằng chứng cảnh đã đổi. Lập kế hoạch mới để dịch/xuất đúng ngữ cảnh đã duyệt.')
                 if plan.get('source_track_id'):
                     source=next((t for t in doc['tracks'] if t['id']==plan['source_track_id']),None)
                     if not source or fingerprint(source['cues'])!=plan['source_hash']:raise ValueError('Nguồn phụ đề đã đổi. Pipeline dừng để bảo toàn chỉnh sửa; lập kế hoạch mới.')
@@ -180,7 +182,7 @@ def tick():
                         media=db.execute('SELECT metadata FROM assets WHERE id=?',(aid,)).fetchone();meta=json.loads(media[0]);stream=next(s for s in meta['streams'] if s.get('codec_type')=='audio');offset=max(0,round((float(stream.get('start_time',0))-float(meta.get('format',{}).get('start_time',0)))*1000))
                         payloads=[('transcribe',{'provider':plan['providers']['asr'],'source_language':p['request']['source_language'],'audio_stream':0,'asset_id':aid,'source_offset_ms':offset})]
                     elif stage=='translate':
-                        source=plan['source'];payloads=[('translate',{'source':source,'target_language':language,'provider':plan['providers']['translation'],'glossary':plan['glossary'],'style':p['request'].get('style','natural'),'condense':p['request'].get('condense',False)}) for language in p['request']['targets'] if language!=source.get('language')]
+                        source=plan['source'];payloads=[('translate',{'source':source,'scenes':plan.get('scenes'),'context_note':p['request'].get('context_note',''),'target_language':language,'provider':plan['providers']['translation'],'glossary':plan['glossary'],'style':p['request'].get('style','natural'),'condense':p['request'].get('condense',False)}) for language in p['request']['targets'] if language!=source.get('language')]
                         if source.get('language') in p['request']['targets']:p['track_ids']=[source['id']]
                     elif stage=='export':payloads=[('auto_export',{'track_ids':p.get('track_ids',[]),'track_hashes':{t['id']:fingerprint(t['cues']) for t in doc['tracks'] if t['id'] in p.get('track_ids',[])},'pipeline_id':p['id']})]
                     elif stage=='render':

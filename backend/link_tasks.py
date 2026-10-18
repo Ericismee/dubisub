@@ -49,7 +49,7 @@ def stream_file(client, url, path, cap, headers=None, progress=lambda size,total
         validator_path.write_text(new_validator)
         size=previous
         with path.open('ab' if previous else 'wb') as output:
-            while chunk:=response.read(256*1024):
+            while chunk:=response.read(1024*1024):
                 size+=len(chunk)
                 if size>cap or shutil.disk_usage(path.parent).free < len(chunk)+64*1024**2:
                     raise ValueError('Vượt giới hạn tải hoặc không đủ dung lượng đĩa dự phòng.')

@@ -150,3 +150,24 @@ def test_youtube_signed_url_refresh_preserves_selection(fixture_source,monkeypat
         assert state['jobs'][0]['state']=='succeeded',state
         assert len(calls)==2 and len(attempts)==2
         assert c.get('/api/projects/'+pid).json()['tracks'][0]['cues'][0]['text']=='Chào từ link 世界'
+
+
+def test_download_buffer_bounds_and_preserves_bytes(tmp_path):
+    import io,hashlib
+    from backend.link_tasks import stream_file
+    payload=b'permitted local benchmark data'*100000
+    class Response:
+        status=200
+        headers={'Content-Length':str(len(payload))}
+        def __init__(self):self.data=io.BytesIO(payload);self.calls=[]
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def read(self,n):self.calls.append(n);return self.data.read(n)
+    response=Response()
+    class Client:
+        def open(self,*args,**kwargs):return response
+    target=tmp_path/'download.part'
+    assert stream_file(Client(),'https://fixture.invalid/media',target,len(payload))==len(payload)
+    assert hashlib.sha256(target.read_bytes()).digest()==hashlib.sha256(payload).digest()
+    assert max(response.calls)==1024*1024
+    assert len(response.calls)==(len(payload)+1024*1024-1)//(1024*1024)+1

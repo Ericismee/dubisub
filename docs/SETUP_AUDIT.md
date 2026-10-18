@@ -47,3 +47,6 @@ Verdict: M1 local foundation baseline runs and has end-to-end evidence. AI provi
 ## URL-import and studio update
 
 yt-dlp 2026.8.19 is pinned in pyproject.toml/uv.lock. Its request-handler interface was inspected locally; all handlers are replaced by the DNS-pinned safe transport. No Node/remote JS solver, browser cookie or proxy integration was enabled. Manual YouTube sample jNQXAC9IVRw imported and probed successfully in temporary storage; automated tests use an explicitly injected local fixture policy. SQLite schema is now 3; connections close after transactions on Windows. Latest checks: 14 pytest tests, TypeScript/build and extended Edge E2E passed. UI is dark by default with separate settings groups and recoverable project deletion. See STATUS for unsupported source types and incomplete M2 areas.
+
+
+2026-10-18 update: local faster-whisper1.2.1 / av16.0.1 with pinned Systran small weights installed and exercised CPU/int8. Actual generated English speech → local ASR → Qwen Vietnamese → subtitle/blurred MP4 smoke passed (scripts/check_local_subtitles.py). Model cache is ignored data/asr-models; no key needed for ASR inference. Ollama/Qwen, LLaVA and local VieNeu have separate live smoke evidence in STATUS; this does not certify arbitrary endpoints or AI accuracy. Earlier absence statements above are historical.
