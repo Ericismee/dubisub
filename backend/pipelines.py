@@ -13,7 +13,16 @@ from .ai_tasks import fingerprint
 from .workflows import tag
 router=APIRouter(prefix='/api')
 
+class ReviewOptions(BaseModel):
+    audience:str=Field(default='Người xem phổ thông',max_length=200)
+    tone:Literal['balanced','humorous','curious']='balanced'
+    pronouns:str=Field(default='',max_length=300)
+
 class Plan(BaseModel):
+    review_options:ReviewOptions=Field(default_factory=ReviewOptions)
+    quality:Literal['fast','balanced','careful']='balanced'
+    batch_size:int=Field(default=8,ge=1,le=20)
+    concurrency:int=Field(default=1,ge=1,le=2)
     revision:int
     mode:Literal['translate','summary','review','describe']='translate'
     asset_id:str|None=None
@@ -83,6 +92,7 @@ def plan_for(pid,body):
         stages.append('vision')
     try:
         configs['translation']=configured('translation')
+        if configs['translation'].get('protocol')=='ollama' and body.concurrency>1:blockers.append('Ollama local chỉ chạy một request dịch mỗi lúc để tránh tranh bộ nhớ.')
         if not verified(configs['translation'],'text'):blockers.append('Model LLM chưa qua kiểm tra text/JSON inference. Liệt kê model chưa đủ để chạy Auto.')
         transfers.append({'role':'LLM','endpoint':configs['translation']['endpoint'],'model':configs['translation']['model'],'data':'Transcript/glossary hoặc kết quả cảnh; không gửi video gốc.'})
     except ProviderError as e:blockers.append(str(e))
@@ -182,7 +192,7 @@ def tick():
                         media=db.execute('SELECT metadata FROM assets WHERE id=?',(aid,)).fetchone();meta=json.loads(media[0]);stream=next(s for s in meta['streams'] if s.get('codec_type')=='audio');offset=max(0,round((float(stream.get('start_time',0))-float(meta.get('format',{}).get('start_time',0)))*1000))
                         payloads=[('transcribe',{'provider':plan['providers']['asr'],'source_language':p['request']['source_language'],'audio_stream':0,'asset_id':aid,'source_offset_ms':offset,'word_timestamps':plan['providers']['asr'].get('protocol')=='faster_whisper'})]
                     elif stage=='translate':
-                        source=plan['source'];payloads=[('translate',{'source':source,'scenes':plan.get('scenes'),'context_note':p['request'].get('context_note',''),'target_language':language,'provider':plan['providers']['translation'],'glossary':plan['glossary'],'style':p['request'].get('style','natural'),'condense':p['request'].get('condense',False)}) for language in p['request']['targets'] if language!=source.get('language')]
+                        source=plan['source'];payloads=[('translate',{'source':source,'quality':p['request'].get('quality','balanced'),'batch_size':p['request'].get('batch_size',8),'concurrency':p['request'].get('concurrency',1),'scenes':plan.get('scenes'),'context_note':p['request'].get('context_note',''),'target_language':language,'provider':plan['providers']['translation'],'glossary':plan['glossary'],'style':p['request'].get('style','natural'),'condense':p['request'].get('condense',False)}) for language in p['request']['targets'] if language!=source.get('language')]
                         if source.get('language') in p['request']['targets']:p['track_ids']=[source['id']]
                     elif stage=='export':payloads=[('auto_export',{'track_ids':p.get('track_ids',[]),'track_hashes':{t['id']:fingerprint(t['cues']) for t in doc['tracks'] if t['id'] in p.get('track_ids',[])},'pipeline_id':p['id']})]
                     elif stage=='render':
@@ -191,7 +201,7 @@ def tick():
                         render_plan=normalize_plan(p['request'].get('render_plan',{}),round(float(meta['format']['duration'])*1000))
                         payloads=[('render',{'plan':render_plan,'track_id':t['id'],'cues':t['cues'],'burn_subtitles':True,'source_revision':doc['revision'],'auto_export_consent':p['plan']['signature']}) for t in doc['tracks'] if t['id'] in p.get('track_ids',[])]
                     elif stage=='vision':payloads=[('vision',{'provider':plan['providers']['vision'],'language':p['request']['targets'][0]})]
-                    elif stage=='analyze':payloads=[('analyze',{'provider':plan['providers']['translation'],'source':plan.get('source'),'scenes':plan.get('scenes'),'mode':p['request']['mode'],'language':p['request']['targets'][0],'style':p['request'].get('style','natural'),'spoiler':p['request'].get('spoiler','limited'),'target_duration_s':p['request'].get('target_duration_s',60)})]
+                    elif stage=='analyze':payloads=[('analyze',{'review_options':p['request'].get('review_options',{}),'glossary':plan.get('glossary',{}),'provider':plan['providers']['translation'],'source':plan.get('source'),'scenes':plan.get('scenes'),'mode':p['request']['mode'],'language':p['request']['targets'][0],'style':p['request'].get('style','natural'),'spoiler':p['request'].get('spoiler','limited'),'target_duration_s':p['request'].get('target_duration_s',60)})]
                     ids=[]
                     for number,(kind,payload) in enumerate(payloads):
                         jid=str(uuid5(NAMESPACE_URL,f"dubisub:{p['id']}:{index}:{number}"));payload['pipeline_id']=p['id']

@@ -10,6 +10,10 @@ if (!(Test-Path '.venv/Scripts/python.exe') -or !(Test-Path 'frontend/node_modul
 }
 $taskRoot = (Get-Location).Path
 $taskPython = Join-Path $taskRoot '.venv/Scripts/python.exe'
+$taskExistingWorkers = @(Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.ExecutablePath -eq $taskPython -and $_.CommandLine -match 'backend\.worker' })
+if ($taskExistingWorkers.Count -gt 0) {
+    throw ('Another DubiSub worker is already running: ' + (($taskExistingWorkers | ForEach-Object { $_.ProcessId }) -join ',') + '. Stop that owned worker before starting a second version. No process was stopped.')
+}
 [System.IO.Directory]::CreateDirectory((Join-Path $taskRoot 'data')) | Out-Null
 @{ pid = $PID; startTicks = [string](Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks; root = $taskRoot } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $taskRoot 'data/launcher.json')
 $apiProcess = $null

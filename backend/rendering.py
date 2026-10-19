@@ -21,6 +21,10 @@ def normalize_plan(raw, duration_ms):
     mask=raw.get('subtitle_mask',{'enabled':False,'x':.05,'y':.74,'width':.9,'height':.24,'strength':8})
     if not isinstance(mask,dict) or not isinstance(mask.get('enabled'),bool):raise ValueError('Thiết lập vùng làm mờ không hợp lệ.')
     mask={k:mask.get(k,v) for k,v in {'enabled':False,'x':.05,'y':.74,'width':.9,'height':.24,'strength':8}.items()}
+    original_mask=raw.get('subtitle_mask',{})
+    if original_mask.get('mode')=='tracked':
+        from .subtitle_masks import regions
+        mask.update(mode='tracked',regions=regions(original_mask.get('regions',[]),duration_ms),track_id=original_mask.get('track_id'))
     if any(isinstance(mask[k],bool) or not isinstance(mask[k],(int,float)) or not math.isfinite(mask[k]) for k in ('x','y','width','height','strength')):raise ValueError('Vùng làm mờ cần số hữu hạn.')
     if not (0<=mask['x']<=.98 and 0<=mask['y']<=.98 and .02<=mask['width']<=1 and .02<=mask['height']<=1 and mask['x']+mask['width']<=1.000001 and mask['y']+mask['height']<=1.000001 and 1<=mask['strength']<=30):raise ValueError('Vùng làm mờ phải nằm trong khung nguồn; cường độ 1–30.')
     w,h={'16:9':(resolution*16//9,resolution),'9:16':(resolution,resolution*16//9),'1:1':(resolution,resolution)}[aspect]
@@ -38,14 +42,21 @@ def output_cues(cues, plan):
     return [c for c in result if c['end_ms']>c['start_ms']]
 
 
-def video_filter_args(plan,cues,directory,burn_subtitles):
+def video_filter_args(plan,cues,directory,burn_subtitles,tail_duration=None):
     filters=f"setpts=(PTS-STARTPTS)/{plan['speed']},scale={plan['width']}:{plan['height']}:force_original_aspect_ratio=decrease,pad={plan['width']}:{plan['height']}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps={plan['fps']}"
+    if tail_duration is not None:filters+=f',tpad=stop_mode=clone:stop_duration={tail_duration},trim=duration={tail_duration},setpts=PTS-STARTPTS'
     if burn_subtitles:
         # Local generated ASS uses plain text and an internal fixed path, never an untrusted filter expression.
         (directory/'captions.ass').write_text(export(cues,'ass'),encoding='utf-8')
         filters+=',subtitles=filename=captions.ass:charenc=UTF-8'
     mask=plan.get('subtitle_mask',{})
-    if mask.get('enabled'):
+    if mask.get('enabled') and mask.get('mode')=='tracked':
+        from .mask_render import write_ass
+        write_ass(directory/'mask.ass',mask['regions'],plan)
+        graph="[0:v:0]setpts=PTS-STARTPTS,split=3[base][region][matte];[matte]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill,subtitles=filename=mask.ass,format=gray[alpha];"
+        graph+=f"[region]boxblur=luma_radius={mask['strength']}:luma_power=2[soft];[soft][alpha]alphamerge[masked];[base][masked]overlay,{filters}[vout]"
+        video_args=['-filter_complex',graph,'-map','[vout]']
+    elif mask.get('enabled'):
         graph=f"[0:v:0]split[base][region];[region]crop=w='max(2,trunc(iw*{mask['width']}/2)*2)':h='max(2,trunc(ih*{mask['height']}/2)*2)':x=iw*{mask['x']}:y=ih*{mask['y']},boxblur=luma_radius='max(0,min({mask['strength']},min(w,h)/2-1))':luma_power=2[blurred];[base][blurred]overlay=x=main_w*{mask['x']}:y=main_h*{mask['y']},{filters}[vout]"
         video_args=['-filter_complex',graph,'-map','[vout]']
     else:video_args=['-vf',filters,'-map','0:v:0']

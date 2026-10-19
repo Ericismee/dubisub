@@ -54,6 +54,10 @@ def test_real_export_trim_speed_canvas_audio_and_subtitle(tmp_path,monkeypatch,b
         assert (v['width'],v['height'])==(360,640)
         assert abs(float(meta['format']['duration'])-1)<.15
         assert abs(float(a['duration'])-float(v['duration']))<.15
+        # Subtitle-only render must retain audible source after the cue ends.
+        from array import array
+        samples=array('h',subprocess.check_output(['ffmpeg','-v','error','-ss','0.8','-i',str(path),'-t','0.15','-f','s16le','-ac','1','pipe:1']))
+        assert sum(x*x for x in samples)/max(1,len(samples))>10000
         for position,channel in ((.25,1),(.75,2)):
             pixel=subprocess.check_output(['ffmpeg','-v','error','-ss',str(position),'-i',str(path),'-vf','crop=2:2:179:319,scale=1:1','-frames:v','1','-pix_fmt','rgb24','-threads','1','-f','rawvideo','pipe:1'])
             assert pixel[channel]==max(pixel) and pixel[channel]>pixel[0]

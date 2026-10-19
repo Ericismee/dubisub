@@ -44,6 +44,8 @@ def provider(tmp_path,monkeypatch):
                 value={'items':[{'text':'Fixture: visible test pattern','evidence_ids':list(data['frames'])}]}
                 self.respond({'choices':[{'message':{'content':json.dumps(value)}}]});return
             data=json.loads(content);state['requests'].append(data)
+            if state.get('rate_limit_once'):
+                state['rate_limit_once']=False;self.respond({'error':'fixture-rate-limit'},429);return
             if 'evidence' in data:
                 value={'items':[{'text':'Fixture summary only','evidence_ids':list(data['evidence'])[:2]}]}
                 self.respond({'choices':[{'message':{'content':json.dumps(value)}}]});return
@@ -233,7 +235,7 @@ def test_untranslated_han_repaired_without_changing_ids_or_context(provider):
     assert result['jobs'][-1]['state']=='succeeded',result['jobs'][-1]
     translated=result['tracks'][-1]
     assert [(c['id'],c['start_ms'],c['end_ms']) for c in translated['cues']]==[(c['id'],c['start_ms'],c['end_ms']) for c in original['cues']]
-    assert len(state['requests'])==3
+    assert len(state['requests'])==2
     assert all(r['context_note']=='Known relationship, not extra dialogue.' for r in state['requests'])
 
 
@@ -242,6 +244,44 @@ def test_han_validation_only_allows_explicit_glossary_values():
     from backend.providers import ProviderError
     with pytest.raises(ProviderError):validate_target_text([{'text':'Ngôi nhà 房子'}],'vi')
     validate_target_text([{'text':'Tên gốc 静香'}],'vi',{'Shizuka':'静香'})
+
+
+def test_batch_cache_metrics_invalidation_and_quality(provider):
+    client,state,_=provider;p=source(client,8);pid=p['id'];source_track=p['tracks'][0]
+    def run(quality='balanced'):
+        current=client.get('/api/projects/'+pid).json()
+        r=client.post(f'/api/projects/{pid}/translate',json={'revision':current['revision'],'track_id':source_track['id'],'target_languages':['vi'],'batch_size':2,'quality':quality,'concurrency':2})
+        assert r.status_code==202,r.text
+        worker.run_once();result=client.get('/api/projects/'+pid).json()
+        assert result['jobs'][-1]['state']=='succeeded',result['jobs'][-1]
+        return result['jobs'][-1]['metrics']
+    first=run();assert first['requests']==4 and first['cache_hits']==0
+    count=len(state['requests']);second=run();assert len(state['requests'])==count and second['requests']==0 and second['cache_hits']==4
+    with store.connect() as db:
+        doc=store.project(db,pid);doc['tracks'][0]['cues'][0]['text']='Changed spoken words';store.save(db,doc)
+    changed=run();assert changed['requests']==3 and changed['cache_hits']==1
+    careful=run('careful');assert careful['requests']==8 and careful['cache_hits']==0 and careful['proofread_seconds']>=0
+
+
+def test_rate_limit_backoff_is_bounded_and_measured(provider):
+    client,state,_=provider;p=source(client);state['rate_limit_once']=True
+    r=client.post(f"/api/projects/{p['id']}/translate",json={'revision':p['revision'],'track_id':p['tracks'][0]['id'],'target_languages':['vi']})
+    assert r.status_code==202;worker.run_once();result=client.get('/api/projects/'+p['id']).json();metrics=result['jobs'][-1]['metrics']
+    assert result['jobs'][-1]['state']=='succeeded' and metrics['requests']==2 and metrics['rate_limit_retries']==1
+
+
+def test_partial_translation_is_an_independent_editable_copy(provider):
+    client,state,_=provider;p=source(client,25);pid=p['id'];state['fail_batch']=True
+    r=client.post(f'/api/projects/{pid}/translate',json={'revision':p['revision'],'track_id':p['tracks'][0]['id'],'target_languages':['vi']})
+    jid=r.json()['jobs'][0]['id'];worker.run_once();p=client.get('/api/projects/'+pid).json()
+    assert p['jobs'][-1]['state']=='failed' and p['jobs'][-1]['completed_cues']==20
+    response=client.post(f'/api/jobs/{jid}/partial-track',json={'revision':p['revision']});assert response.status_code==201,response.text
+    tid=response.json()['track_id']
+    with store.connect() as db:
+        doc=store.project(db,pid);draft=next(t for t in doc['tracks'] if t['id']==tid);draft['cues'][0]['text']='User edit preserved';store.save(db,doc)
+    client.post(f'/api/jobs/{jid}/retry');worker.run_once();p=client.get('/api/projects/'+pid).json()
+    assert next(t for t in p['tracks'] if t['id']==tid)['cues'][0]['text']=='User edit preserved'
+    assert any(len(t['cues'])==25 and t.get('kind')=='translation' and t['id']!=tid for t in p['tracks'])
 
 
 def test_translation_uses_nearby_visual_context_and_short_ids(provider):

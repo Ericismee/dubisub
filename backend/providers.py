@@ -2,6 +2,7 @@
 import json
 import os
 import hashlib
+import time
 from urllib.parse import urlsplit
 
 import httpx
@@ -9,6 +10,9 @@ from . import store
 
 
 class ProviderError(ValueError):
+    pass
+
+class ProviderBusy(ProviderError):
     pass
 
 DEFAULT_TTS={'kind':'tts','protocol':'openai','endpoint':'http://127.0.0.1:8001/v1','model':'vieneu-v3-turbo','key_env':''}
@@ -55,7 +59,7 @@ def request(config, path, *, body=None, files=None, data=None, max_bytes=8*1024*
         with httpx.Client(trust_env=False,follow_redirects=False,timeout=httpx.Timeout(timeout,connect=min(10,timeout))) as client:
             with client.stream('GET' if body is None and files is None else 'POST',config['endpoint'].rstrip('/')+'/'+path.lstrip('/'),headers=headers,json=body,files=files,data=data) as response:
                 if response.status_code in (401,403):raise ProviderError('Provider từ chối xác thực. Kiểm tra quyền truy cập và khóa.')
-                if response.status_code==429:raise ProviderError('Provider đang giới hạn lượt gọi. Hãy thử lại sau.')
+                if response.status_code in (429,502,503):raise ProviderBusy('Provider đang giới hạn lượt gọi hoặc tạm bận. Đã giới hạn số lần thử; có thể tiếp tục từ checkpoint.')
                 if response.status_code>=300:
                     role='ASR → Nhận dạng giọng nói' if 'transcriptions' in path else 'TTS → Giọng đọc' if 'speech' in path else 'LLM / Vision'
                     hint='Yêu cầu không phù hợp giao thức hoặc model. Kiểm tra đúng nhóm '+role+' trong Cài đặt, kiểm tra kết nối và khả năng xử lý; sau khi sửa hãy tạo lượt mới.'
@@ -98,18 +102,39 @@ def ollama_config(config):
     return result
 
 
-def chat_json(config, messages, images=None):
+def chat_json(config, messages, images=None,metrics=None):
     messages=[dict(m) for m in messages]
     if images:
         if config.get('protocol')=='ollama':messages[-1]['images']=images
         else:messages[-1]['content']=[{'type':'text','text':messages[-1]['content']}]+[{'type':'image_url','image_url':{'url':'data:image/jpeg;base64,'+value}} for value in images]
     if config.get('protocol')=='ollama':
-        response=request(ollama_config(config),'api/chat',body={'model':config['model'],'messages':messages,'stream':False,'format':'json','options':{'temperature':0.1,'num_predict':4096}})
+        response=chat_request(ollama_config(config),'api/chat',{'model':config['model'],'messages':messages,'stream':False,'format':'json','options':{'temperature':0.1,'num_predict':4096}},metrics)
         try:return json.loads(response['message']['content'])
         except (KeyError,TypeError,ValueError):raise ProviderError('Ollama không trả chat/JSON hợp lệ.') from None
-    response=request(config,'chat/completions',body={'model':config['model'],'messages':messages,'temperature':0.1,'max_tokens':4096,'response_format':{'type':'json_object'}})
+    response=chat_request(config,'chat/completions',{'model':config['model'],'messages':messages,'temperature':0.1,'max_tokens':4096,'response_format':{'type':'json_object'}},metrics)
     try:return json.loads(response['choices'][0]['message']['content'])
     except (KeyError,TypeError,IndexError,ValueError):raise ProviderError('Provider không trả cấu trúc chat/JSON hợp lệ.') from None
+
+
+def chat_request(config,path,body,metrics):
+    started=time.perf_counter()
+    try:
+        for attempt in range(2):
+            if metrics is not None:metrics['requests']=metrics.get('requests',0)+1
+            try:
+                result=request(config,path,body=body)
+                if not isinstance(result,dict):raise ProviderError('Provider không trả đối tượng JSON hợp lệ.')
+                if metrics is not None:
+                    usage=result.get('usage',{}) if isinstance(result,dict) else {}
+                    for key,value in [('input_tokens',result.get('prompt_eval_count',usage.get('prompt_tokens'))),('output_tokens',result.get('eval_count',usage.get('completion_tokens')))]:
+                        if type(value) is int and value>=0:metrics[key]=metrics.get(key,0)+value;metrics['tokens_reported']=True
+                return result
+            except ProviderBusy:
+                if attempt:raise
+                if metrics is not None:metrics['rate_limit_retries']=metrics.get('rate_limit_retries',0)+1
+                time.sleep(.5)
+    finally:
+        if metrics is not None:metrics['llm_seconds']=metrics.get('llm_seconds',0)+time.perf_counter()-started
 
 def signature(config):
     value={k:config.get(k,'openai' if k=='protocol' else '') for k in ('endpoint','protocol','model','key_env')}

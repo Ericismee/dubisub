@@ -15,6 +15,8 @@ from urllib.request import urlopen
 from playwright.sync_api import sync_playwright, expect
 
 ROOT = Path(__file__).resolve().parents[1]
+UI_PORT=int(os.getenv('DUBISUB_E2E_UI_PORT','3600'))
+API_PORT=int(os.getenv('DUBISUB_E2E_API_PORT','6060'))
 
 
 def available(port):
@@ -26,8 +28,9 @@ def available(port):
 
 
 def main():
+    if hasattr(sys.stdout,'reconfigure'):sys.stdout.reconfigure(encoding='utf-8')
     os.chdir(ROOT)
-    for port in (3600, 6060):
+    for port in (UI_PORT, API_PORT):
         available(port)
     with tempfile.TemporaryDirectory(prefix='dubisub-e2e-') as temporary:
         work = Path(temporary)
@@ -78,18 +81,20 @@ def main():
         fixture=ThreadingHTTPServer(('127.0.0.1',0),FixtureHandler)
         fixture_thread=threading.Thread(target=fixture.serve_forever,daemon=True);fixture_thread.start()
         env = dict(os.environ, DUBISUB_DATA_DIR=str(work/'dữ liệu riêng'))
+        vite_config=work/'vite.config.mjs'
+        vite_config.write_text("export default {server:{proxy:{'/api':'http://127.0.0.1:"+str(API_PORT)+"','/health':'http://127.0.0.1:"+str(API_PORT)+"'}}};",encoding='utf-8')
         processes = []
         log = (work/'servers.log').open('w',encoding='utf-8')
         try:
-            for args in ([sys.executable,'-m','uvicorn','backend.app:app','--host','127.0.0.1','--port','6060'],
+            for args in ([sys.executable,'-m','uvicorn','backend.app:app','--host','127.0.0.1','--port',str(API_PORT)],
                          [sys.executable,str(ROOT/'tests/url_fixture_worker.py'),str(fixture.server_port)],
-                         [shutil.which('node'),str(ROOT/'frontend/node_modules/vite/bin/vite.js'),'--host','127.0.0.1','--port','3600','--strictPort']):
+                         [shutil.which('node'),str(ROOT/'frontend/node_modules/vite/bin/vite.js'),'--host','127.0.0.1','--port',str(UI_PORT),'--strictPort','--config',str(vite_config)]):
                 processes.append(subprocess.Popen(args,cwd=ROOT/'frontend' if args[0]==shutil.which('node') else ROOT, env=env, stdout=log, stderr=log))
-            for port in (6060,3600):
+            for port in (API_PORT,UI_PORT):
                 deadline=time.monotonic()+30
                 while True:
                     try:
-                        urlopen(f'http://127.0.0.1:{port}'+('/health' if port==6060 else '/'),timeout=1).close()
+                        urlopen(f'http://127.0.0.1:{port}'+('/health' if port==API_PORT else '/'),timeout=1).close()
                         break
                     except Exception:
                         if time.monotonic()>deadline:raise RuntimeError('Server startup timed out')
@@ -100,7 +105,10 @@ def main():
                 page=browser.new_page(viewport={'width':1440,'height':1000})
                 errors=[]
                 page.on('pageerror',lambda error:errors.append(str(error)))
-                page.goto('http://127.0.0.1:3600')
+                if UI_PORT!=3600:
+                    # Test-only origin remap; production origin policy stays fixed.
+                    page.route('**/api/**',lambda route:route.continue_(headers={**route.request.headers,'origin':'http://127.0.0.1:3600'}))
+                page.goto(f'http://127.0.0.1:{UI_PORT}')
                 page.wait_for_load_state('networkidle')
                 assert page.evaluate('document.documentElement.dataset.theme')=='dark'
                 page.get_by_role('button',name='Cài đặt studio',exact=True).click()
@@ -137,7 +145,7 @@ def main():
                 expect(page.get_by_role('heading',name='Tạo dự án',exact=True)).to_be_visible()
                 # All core studio surfaces exist before selecting or creating a project.
                 expect(page.get_by_role('navigation',name='Công cụ studio')).to_be_visible()
-                expect(page.get_by_role('heading',name='Phụ đề nguồn',exact=True)).to_be_visible()
+                expect(page.get_by_role('heading',name='Phụ đề nguồn',exact=True,include_hidden=True)).to_have_count(1)
                 expect(page.get_by_role('region',name='Timeline nguồn')).to_be_visible()
                 assert page.locator('.studio-banner').evaluate('(i)=>i.complete && i.naturalWidth > 0')
                 assert page.locator('.brand-wordmark').evaluate('(i)=>i.complete && i.naturalWidth > 0')
@@ -156,9 +164,9 @@ def main():
                 expect(page.get_by_role('dialog',name='Sửa dự án',exact=True)).to_be_visible()
                 page.get_by_role('dialog',name='Sửa dự án',exact=True).get_by_role('button',name='Hủy',exact=True).click()
                 page.get_by_label('Nhập video hoặc audio',exact=True).set_input_files(sample)
-                expect(page.get_by_text('succeeded',exact=False)).to_be_visible(timeout=20000)
                 page.wait_for_function('document.querySelector("video")?.readyState >= 1')
                 assert page.locator('main.stage video').evaluate('(v)=>v.duration') == 3
+                page.get_by_role('navigation',name='Công cụ studio').get_by_role('button',name='Phụ đề',exact=True).click()
                 page.get_by_label('Nhập phụ đề',exact=True).set_input_files(sub)
                 cue=page.get_by_label('Câu 1',exact=True)
                 expect(cue).to_have_value('Xin chào Việt Nam!',timeout=15000)
@@ -171,13 +179,16 @@ def main():
                 expect(cue).to_have_value('Chào DubiSub — tiếng Việt 世界')
                 expect(page.get_by_role('status')).to_have_text('Đã tự lưu',timeout=10000)
                 page.get_by_role('button',name='Tới câu 2',exact=True).click()
+                page.keyboard.press('Escape')
                 assert abs(page.locator('main.stage video').evaluate('(v)=>v.currentTime')-1.3)<.05
                 # Reopening must round-trip through SQLite, not component state.
                 page.reload();page.wait_for_load_state('networkidle')
                 page.locator('.project-open').filter(has_text='Bản dịch thử nghiệm').click()
+                page.get_by_role('navigation',name='Công cụ studio').get_by_role('button',name='Phụ đề',exact=True).click()
                 expect(page.get_by_label('Câu 1',exact=True)).to_have_value('Chào DubiSub — tiếng Việt 世界')
                 expect(page.get_by_label('Câu 2',exact=True)).to_have_value('مرحبا 世界')
                 page.wait_for_function('document.querySelector("video")?.textTracks[0]?.cues?.length === 2')
+                page.locator('.workspace-tabs button').nth(5).click()
                 page.get_by_role('slider',name='Thu phóng timeline',exact=True).fill('2')
                 assert page.locator('.timeline-content').evaluate('(e)=>e.style.width') == '200%'
                 page.get_by_role('slider',name='Vị trí phát',exact=True).fill('2')
@@ -185,6 +196,7 @@ def main():
                 page.get_by_role('button',name='Phát video',exact=True).click()
                 expect(page.get_by_role('button',name='Tạm dừng',exact=True)).to_be_visible()
                 page.get_by_role('button',name='Tạm dừng',exact=True).click()
+                page.keyboard.press('Escape')
                 page.get_by_label('Tỷ lệ preview').select_option('9/16')
                 assert page.locator('.preview-frame').evaluate('(e)=>e.style.aspectRatio') == '9 / 16'
                 page.get_by_label('Tỷ lệ preview').select_option('16/9')
@@ -192,6 +204,7 @@ def main():
                 expect(page.get_by_role('heading',name='Transcript & bản dịch',exact=True)).to_be_visible()
                 expect(page.get_by_role('heading',name='Phụ đề nguồn',exact=True)).to_be_visible()
                 page.get_by_role('navigation',name='Công cụ studio').get_by_role('button',name='Phụ đề',exact=True).click()
+                page.get_by_role('navigation',name='Công cụ studio').get_by_role('button',name='Xuất file',exact=True).click()
                 for fmt in ('SRT','VTT','ASS'):
                     with page.expect_download() as download:
                         page.get_by_role('link',name='Xuất '+fmt,exact=True).click()
@@ -199,6 +212,7 @@ def main():
                     assert 'Chào DubiSub — tiếng Việt 世界' in content
                     assert 'مرحبا 世界' in content
                     assert ('00:00:00,100' if fmt=='SRT' else '00:00:00.100' if fmt=='VTT' else '0:00:00.10') in content
+                page.get_by_role('navigation',name='Công cụ studio').get_by_role('button',name='Phụ đề',exact=True).click()
                 page.locator('.subtitle-tools summary').click()
                 page.get_by_label('Tìm chữ phụ đề',exact=True).fill('Chào DubiSub')
                 page.get_by_label('Thay chữ phụ đề',exact=True).fill('Đổi thử')
@@ -219,6 +233,7 @@ def main():
                 expect(page.get_by_role('status')).to_have_text('Đã tự lưu',timeout=10000)
                 expect(page.get_by_label('Câu 1',exact=True)).to_have_value('Chào DubiSub — tiếng Việt 世界')
                 page.locator('.subtitle-tools summary').click()
+                page.get_by_role('navigation',name='Công cụ studio').get_by_role('button',name='Xuất file',exact=True).click()
                 page.get_by_label('Vùng xuất bắt đầu',exact=True).fill('1000')
                 page.get_by_label('Vùng xuất kết thúc',exact=True).fill('3000')
                 page.get_by_label('Tốc độ xuất',exact=True).select_option('2')
@@ -227,7 +242,9 @@ def main():
                 with page.expect_download() as rendered:
                     page.locator('.artifact-list a').click()
                 assert Path(rendered.value.path()).stat().st_size>100
+                page.get_by_role('navigation',name='Công cụ studio').get_by_role('button',name='Dịch thuật',exact=True).click()
                 page.get_by_label('Ngôn ngữ dịch đích',exact=True).fill('vi, en')
+                page.get_by_text('Ngữ cảnh, nhân vật & xưng hô',exact=True).click()
                 page.get_by_label('Ngữ cảnh bản dịch',exact=True).fill('Hai đồng nghiệp trò chuyện, giữ cách xưng hô nhất quán.')
                 page.get_by_label('Cảnh hỗ trợ bản dịch',exact=True).select_option('')
                 page.get_by_role('button',name='Dịch bản phụ đề đang chọn',exact=True).click()
@@ -271,12 +288,14 @@ def main():
                 panel.locator('.dubbing-consent').filter(has_text='Tôi đồng ý gửi văn bản').locator('input').check()
                 panel.get_by_role('button',name='Tạo mẫu nghe / đọc văn bản',exact=True).click()
                 expect(panel.locator('.narration-result')).to_have_count(1,timeout=20000)
+                panel.locator('.narration-result').first.locator('summary').click()
                 panel.get_by_text('Nhân vật & đọc track phụ đề',exact=True).click()
                 panel.get_by_role('button',name='Thêm nhân vật',exact=True).click()
                 panel.locator('.narration-cues select').first.select_option('Nhân vật 1')
                 panel.get_by_label('Xuất thêm MP4 dùng video gốc và giọng đọc mới (thay audio gốc).',exact=True).check()
                 panel.get_by_role('button',name='Đọc track đã chọn',exact=True).click()
                 expect(panel.locator('.narration-result')).to_have_count(2,timeout=25000)
+                panel.locator('.narration-result').first.locator('summary').click()
                 expect(panel.get_by_text('Tải MP4 có giọng đọc',exact=True)).to_be_visible()
                 with page.expect_download() as narrated:
                     panel.get_by_text('Tải MP4 có giọng đọc',exact=True).click()
@@ -290,6 +309,7 @@ def main():
                 panel.get_by_text('Nhân vật & đọc track phụ đề',exact=True).click()
                 panel.get_by_role('button',name='Tạo lại riêng câu',exact=True).first.click()
                 expect(panel.locator('.narration-result')).to_have_count(3,timeout=20000)
+                panel.locator('.narration-result').first.locator('summary').click()
                 assert panel.locator('.narration-warning').count()==0
                 expect(panel.get_by_role('button',name='Tạo video có giọng & phụ đề',exact=True)).to_be_visible()
                 expect(panel.get_by_text('Phụ đề theo giọng · SRT',exact=True).first).to_be_visible()
@@ -300,7 +320,8 @@ def main():
                 expect(panel.locator('.narration-result')).to_have_count(0)
 
                 page.get_by_role('navigation',name='Công cụ studio').get_by_role('button',name='Phụ đề',exact=True).click()
-                page.get_by_role('button',name='Auto',exact=True).click()
+                page.keyboard.press('Escape')
+                page.locator('.auto-launch').click()
                 auto=page.get_by_role('dialog',name='Xử lý video tự động',exact=True)
                 auto.get_by_role('button',name='6. Đầu ra',exact=True).click()
                 auto.get_by_label('Đầu ra Auto',exact=True).select_option('subtitles')
@@ -325,12 +346,15 @@ def main():
                 page.get_by_role('navigation',name='Công cụ studio').get_by_role('button',name='Review',exact=True).click()
                 analysis=page.locator('.analysis-panel')
                 expect(analysis.get_by_text('Chỉ phân tích transcript',exact=True)).to_be_visible()
+                analysis.get_by_text('Cảnh dựng · mốc nguồn (giây)',exact=True).click()
+                analysis.get_by_label('Từ',exact=True).fill('0')
+                analysis.get_by_label('Đến',exact=True).fill('3')
                 analysis.get_by_role('button',name='Duyệt nội dung',exact=True).click()
-                expect(analysis.locator('summary')).to_contain_text('Đã duyệt')
+                expect(analysis.locator('summary').first).to_contain_text('Đã duyệt')
                 page.get_by_role('navigation',name='Công cụ studio').get_by_role('button',name='Giọng đọc',exact=True).click()
                 panel=page.locator('.dubbing-panel')
                 panel.get_by_role('button',name='Kiểm tra VieNeu & lấy giọng',exact=True).click()
-                expect(panel.get_by_text('Đã đọc khả năng provider. Chưa gửi audio mẫu.',exact=True)).to_be_visible()
+                expect(panel.locator('.provider-disclosure strong')).to_have_text('vieneu-v3-turbo')
                 panel.get_by_label('Nguồn giọng',exact=True).select_option('preset')
                 panel.get_by_label('Giọng lồng tiếng',exact=True).select_option('preset|fixture-vi')
                 panel.get_by_label('Tôi đồng ý gửi văn bản',exact=False).check()
@@ -339,6 +363,7 @@ def main():
                 panel.get_by_label('Xuất MP4 review 640',exact=False).check()
                 panel.get_by_role('button',name='Tạo lời dẫn / review đã duyệt',exact=True).click()
                 expect(panel.locator('.narration-result').filter(has_text='Lời dẫn / review theo timeline mới')).to_have_count(1,timeout=25000)
+                page.get_by_role('navigation',name='Công cụ studio').get_by_role('button',name='Phụ đề',exact=True).click()
                 review_track=page.locator('.track-select option').filter(has_text='Lời dẫn review').get_attribute('value')
                 page.get_by_label('Track phụ đề',exact=True).select_option(review_track)
                 expect(page.get_by_role('region',name='Timeline review',exact=True)).to_be_visible()
@@ -368,7 +393,9 @@ def main():
                 page.get_by_label('Track phụ đề',exact=True).select_option(first)
                 stats['fail_asr']=True
                 page.get_by_role('button',name='Nhận dạng lời thoại',exact=True).click()
-                failed_asr=page.locator('.jobs>div').filter(has_text='Nhận dạng lời thoại').filter(has_text='failed')
+                page.keyboard.press('Escape')
+                page.get_by_role('button',name='Tác vụ',exact=True).click()
+                failed_asr=page.locator('.jobs>div[data-job-kind=transcribe][data-job-state=failed]')
                 expect(failed_asr).to_have_count(1,timeout=15000)
                 expect(failed_asr.locator('small').first).to_contain_text('lượt 1/3')
                 for attempt in (2,3):
@@ -382,13 +409,16 @@ def main():
                 stats['fail_asr']=False
                 page.once('dialog',lambda dialog:dialog.accept())
                 failed_asr.get_by_role('button',name='Tạo lượt mới',exact=True).click()
-                expect(page.locator('.jobs>div').filter(has_text='Nhận dạng lời thoại').filter(has_text='succeeded')).to_have_count(2,timeout=20000)
+                expect(page.locator('.jobs>div[data-job-kind=transcribe][data-job-state=succeeded]')).to_have_count(2,timeout=20000)
                 expect(page.locator('.error-toast')).to_have_count(0)
+                page.keyboard.press('Escape')
+                page.get_by_role('navigation',name='Công cụ studio').get_by_role('button',name='Phụ đề',exact=True).click()
                 page.get_by_label('Câu 1',exact=True).focus()
                 page.keyboard.press('Tab')
                 assert page.evaluate('document.activeElement !== document.body')
                 Path('test-results').mkdir(exist_ok=True)
                 page.screenshot(path='test-results/studio-desktop.png',full_page=True)
+                page.keyboard.press('Escape')
                 page.get_by_role('button',name='Chuyển sang giao diện sáng',exact=True).click()
                 page.wait_for_function("getComputedStyle(document.querySelector('.new-project')).backgroundColor==='rgb(238, 235, 255)'")
                 page.screenshot(path='test-results/studio-light-auto.png',full_page=True)
@@ -413,6 +443,7 @@ def main():
                 expect(page.locator('.project-open').filter(has_text='Bản dịch đã sửa')).to_have_count(0)
                 page.get_by_role('button',name='Khôi phục dự án',exact=True).click()
                 page.locator('.project-open').filter(has_text='Bản dịch đã sửa').click()
+                page.get_by_role('navigation',name='Công cụ studio').get_by_role('button',name='Phụ đề',exact=True).click()
                 expect(page.get_by_label('Câu 1',exact=True)).to_have_value('Chào DubiSub — tiếng Việt 世界')
                 page.screenshot(path='test-results/studio-dark-managed.png',full_page=True)
                 page.get_by_role('button',name='Cài đặt studio',exact=True).click()
@@ -428,6 +459,11 @@ def main():
                 browser.close()
                 print('PASS: real upload/probe, video seek, Unicode/RTL edit, autosave, undo/redo, reopen, SRT/VTT downloads, keyboard focus, mobile width; no browser errors')
         except Exception:
+            import sqlite3
+            try:
+                with sqlite3.connect(work/'dữ liệu riêng/dubisub.sqlite3') as debug_db:print('Last fixture jobs:',debug_db.execute('SELECT kind,state,progress,error FROM jobs ORDER BY rowid DESC LIMIT 6').fetchall())
+                debug_db.close()
+            except Exception:pass
             if 'page' in locals():
                 try: print(page.locator('body').inner_text().encode('ascii','backslashreplace').decode())
                 except Exception: pass

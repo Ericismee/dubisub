@@ -8,6 +8,7 @@ export const tools: {id:Tool;label:string;icon:string}[] = [
   {id:'export',label:'Xuất file',icon:'export'},
 ];
 const paths:Record<string,string>={
+  tasks:'M9 5h12 M9 12h12 M9 19h12 M3 5h1 M3 12h1 M3 19h1',
   edit:'M15 4l5 5 M4 16L16 4a2 2 0 0 1 4 4L8 20l-5 1z',
   moon:'M20.5 13a8.5 8.5 0 0 1-9.5-9.5A8.5 8.5 0 1 0 20.5 13z',
   sun:'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8 M12 2v2 M12 20v2 M2 12h2 M20 12h2 M5 5l1.5 1.5 M17.5 17.5L19 19 M5 19l1.5-1.5 M17.5 6.5L19 5',

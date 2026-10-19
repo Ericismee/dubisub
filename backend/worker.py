@@ -112,15 +112,15 @@ def finish_link(job, result):
         raise
 
 
-def run_once(*, link_executor=None):
+def run_once(*, link_executor=None, job_id=None):
     from .pipelines import tick
-    tick()
+    if job_id is None:tick()
     from .capabilities import run_probe
-    if run_probe(OWNER):return True
+    if job_id is None and run_probe(OWNER):return True
     with store.connect() as db:
         db.execute('BEGIN IMMEDIATE')
         db.execute("UPDATE jobs SET state=CASE WHEN attempts<3 THEN 'queued' ELSE 'failed' END,error='Recovered interrupted worker' WHERE state='running' AND heartbeat<?", (time.time()-30,))
-        row = db.execute("SELECT jobs.*,assets.path FROM jobs JOIN assets ON assets.id=jobs.asset_id WHERE state='queued' ORDER BY jobs.rowid LIMIT 1").fetchone()
+        row = db.execute("SELECT jobs.*,assets.path FROM jobs JOIN assets ON assets.id=jobs.asset_id WHERE state='queued' AND (? IS NULL OR jobs.id=?) ORDER BY jobs.rowid LIMIT 1",(job_id,job_id)).fetchone()
         if row is None:
             return False
         job = dict(row)
@@ -133,8 +133,16 @@ def run_once(*, link_executor=None):
                 with store.connect() as db:
                     db.execute("UPDATE jobs SET heartbeat=? WHERE id=? AND owner=? AND state='running'",(time.time(),job['id'],OWNER))
             except Exception:pass
-    thread=threading.Thread(target=heartbeat,daemon=True);thread.start()
+    thread=threading.Thread(target=heartbeat,daemon=True);thread.start();measured_start=time.perf_counter()
     try:
+        if job['kind']=='subtitle_mask':
+            from .subtitle_masks import execute
+            execute(job,command)
+            return True
+        if job['kind']=='separate':
+            from .separation import execute
+            execute(job,command)
+            return True
         if job['kind'] in ('vision','analyze'):
             result=json.loads(command([sys.executable,'-m','backend.analysis',job['id']],job,timeout=10800))
             if result.get('error'):raise ValueError(result['error'])
@@ -157,6 +165,7 @@ def run_once(*, link_executor=None):
             return True
         if job['kind'] in ('translate','transcribe'):
             if job['kind']=='transcribe':
+                prepare_started=time.perf_counter()
                 metadata=json.loads(db_metadata(job['asset_id']))
                 duration=float(metadata.get('format',{}).get('duration',0))
                 if not 0<duration<=43200:raise ValueError('ASR cần media có thời lượng xác định, tối đa 12 giờ.')
@@ -172,6 +181,11 @@ def run_once(*, link_executor=None):
                              '-i',job['path'],'-map',f'0:a:{payload["audio_stream"]}','-vn','-ac','1','-ar','16000','-c:a','pcm_s16le','-y',str(directory/f'chunk-{number:05d}.wav')],job,timeout=remaining)
                     offsets.append(start+source_offset)
                 (directory/'offsets.json').write_text(json.dumps(offsets))
+                with store.connect() as timing_db:
+                    raw=timing_db.execute('SELECT checkpoint FROM jobs WHERE id=?',(job['id'],)).fetchone()[0]
+                    checkpoint=json.loads(raw) if raw else {'cues':[],'next_batch':0}
+                    metrics=checkpoint.setdefault('metrics',{});metrics['audio_prepare_seconds']=metrics.get('audio_prepare_seconds',0)+time.perf_counter()-prepare_started
+                    timing_db.execute("UPDATE jobs SET checkpoint=? WHERE id=? AND owner=? AND state='running'",(json.dumps(checkpoint),job['id'],OWNER))
             result=json.loads(command([sys.executable,'-m','backend.ai_tasks',job['id']],job,timeout=10800))
             if result.get('error'):raise ValueError(result['error'])
             return True
@@ -179,6 +193,7 @@ def run_once(*, link_executor=None):
             result=link_executor(job['id']) if link_executor else json.loads(command([sys.executable,'-m','backend.link_tasks',job['id']],job,timeout=180 if job['kind']=='inspect_link' else 10800))
             finish_link(job,result)
             return True
+        if job['kind']!='probe':raise ValueError('Worker không hỗ trợ loại tác vụ này. Nạp phiên bản mới; không đánh dấu kiểm tra media thay cho kết quả.')
         metadata = json.loads(command([os.getenv('DUBISUB_FFPROBE', 'ffprobe'), '-v', 'error', '-protocol_whitelist', 'file,pipe', '-format_whitelist', FORMATS,
                                       '-show_format', '-show_streams', '-of', 'json', job['path']], job))
         streams = metadata.get('streams', [])
@@ -209,7 +224,20 @@ def run_once(*, link_executor=None):
         with store.connect() as db:
             db.execute("UPDATE jobs SET state='failed',error=? WHERE id=? AND owner=? AND state='running'", (message[:250], job['id'], OWNER))
     finally:
+        try:
+            with store.connect() as metrics_db:
+                row=metrics_db.execute('SELECT checkpoint FROM jobs WHERE id=? AND owner=?',(job['id'],OWNER)).fetchone()
+                if row:
+                    try:checkpoint=json.loads(row[0]) if row[0] else {}
+                    except (ValueError,TypeError):checkpoint={}
+                    if not isinstance(checkpoint,dict):checkpoint={}
+                    checkpoint.setdefault('metrics',{})['worker_seconds']=round(time.perf_counter()-measured_start,3)
+                    metrics_db.execute('UPDATE jobs SET checkpoint=? WHERE id=? AND owner=?',(json.dumps(checkpoint),job['id'],OWNER))
+        except Exception:pass  # Diagnostics must never prevent cancellation/cleanup.
         stop.set();thread.join(timeout=1)
+        if job['kind']=='separate':
+            path=(store.root()/'separation-staging'/job['id']).resolve()
+            if path.is_relative_to((store.root()/'separation-staging').resolve()) and path.exists():shutil.rmtree(path)
         if job['kind'] in ('vision','analyze'):
             path=(store.root()/'analysis-staging'/job['id']).resolve()
             if path.is_relative_to((store.root()/'analysis-staging').resolve()) and path.exists():shutil.rmtree(path)

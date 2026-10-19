@@ -230,3 +230,31 @@ dialog{color:var(--ink);background:var(--surface);border:1px solid var(--line);b
 .narration-result video{display:block;width:100%;max-height:220px;background:#000;border-radius:8px;margin:10px 0}
 
 .review-cut-list{display:block;margin-top:6px}.review-cut-list button{font-size:11px;padding:4px 6px;margin:3px}
+
+.subtitle-mask-panel,.audio-mix-controls{border:1px solid var(--line);padding:14px;margin:12px 0;border-radius:10px}.subtitle-mask-panel p,.subtitle-mask-panel small{line-height:1.6}.mask-region-list{max-height:420px;overflow:auto}.mask-region-list article{padding:10px 0;border-bottom:1px solid var(--line)}.mask-region-list label{font-size:11px}
+/* Compact tool launcher; editing lives in a focused modal drawer. */
+.studio{grid-template-columns:76px 232px minmax(300px,1fr) 86px}
+.compact-inspector{padding:12px 7px;overflow:auto;background:var(--surface)}
+.compact-inspector .inspector-guide{padding:0;border:0;background:transparent;display:flex;flex-direction:column;gap:10px}
+.compact-inspector .workspace-tabs{display:flex;flex-direction:column;gap:8px}
+.compact-inspector button{width:100%;min-height:58px;flex-direction:column;padding:8px 4px;font-size:10px;background:transparent;color:var(--ink)}
+.studio-drawer{margin:16px 16px 16px auto;width:min(640px,calc(100vw - 32px));height:calc(100dvh - 32px);max-height:none;overflow:hidden}
+.studio-drawer .settings-top{height:72px;padding:16px 22px}
+.drawer-content{height:calc(100% - 72px);overflow:auto;padding:20px 24px;scrollbar-gutter:stable}
+.drawer-content>section,.drawer-content>div{margin-bottom:20px}
+.tasks-dialog{width:min(900px,96vw);height:min(820px,92dvh);padding:0 22px 22px;overflow:auto}
+.tasks-dialog .settings-top{padding-left:0;padding-right:0;position:sticky;top:0;background:var(--surface);z-index:1}
+.tasks-dialog h2{display:flex;align-items:center;gap:10px;font-size:18px}
+.tasks-dialog>p{font-size:12px;color:var(--muted);margin:14px 0}
+.task-filters{display:flex;flex-wrap:wrap;gap:7px;margin:16px 0}
+.task-filters button[aria-pressed=true]{border-color:var(--accent);background:var(--soft);color:var(--accent)}
+.tasks-dialog .jobs{max-height:none;overflow:visible;margin-top:18px;display:grid;gap:12px}
+.tasks-dialog .jobs>div{border:1px solid var(--line);border-radius:12px;padding:16px;background:var(--surface)}
+.tasks-dialog .jobs button{margin:8px 8px 0 0}
+.task-summary{width:100%;justify-content:flex-start;margin:16px 0}
+.toolrail button b{font-size:10px;color:var(--accent)}
+@media(max-width:1020px){.studio{grid-template-columns:64px 210px minmax(0,1fr);grid-template-rows:64px 520px 80px 230px 30px}.compact-inspector{max-height:80px;overflow:auto}.compact-inspector .inspector-guide,.compact-inspector .workspace-tabs{flex-direction:row}.compact-inspector button{min-width:62px}.drawer-content{padding:16px}}
+@media(max-width:650px){.studio{display:flex}.compact-inspector{width:100%;flex:none}.studio-drawer{margin:8px;width:calc(100vw - 16px);height:calc(100dvh - 16px)}.tasks-dialog{padding:0 14px 14px}}
+.studio-drawer{position:fixed;inset:0 0 0 auto;z-index:20;background:color-mix(in srgb,var(--surface) 95%,transparent);backdrop-filter:blur(16px);box-shadow:-16px 0 60px #0005}
+.task-summary{flex-wrap:wrap}.task-summary small{flex-basis:100%;display:flex;align-items:center;gap:6px;text-align:left}.task-summary .job-dot{position:static;margin:0}.tasks-dialog .jobs strong{display:flex;align-items:center;gap:8px}
+@media(min-width:1021px){.studio-drawer{right:90px;margin-right:0}}

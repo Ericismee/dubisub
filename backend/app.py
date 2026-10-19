@@ -37,6 +37,10 @@ from .analysis import router as analysis_router
 app.include_router(analysis_router)
 from .job_restarts import router as restart_router
 app.include_router(restart_router)
+from .subtitle_masks import router as masks_router
+app.include_router(masks_router)
+from .separation import router as separation_router
+app.include_router(separation_router)
 
 
 @app.middleware('http')
@@ -246,9 +250,17 @@ def read(project_id: str):
         document['assets'] = [dict(r) for r in db.execute(
             "SELECT id,filename,kind,checksum,metadata FROM assets WHERE project_id=? AND kind NOT IN ('remote','generated')", (project_id,))]
         document['jobs'] = [dict(r) for r in db.execute(
-            'SELECT id,asset_id,kind,state,attempts,progress,error,payload FROM jobs WHERE project_id=?', (project_id,))]
+            'SELECT id,asset_id,kind,state,attempts,progress,error,payload,checkpoint FROM jobs WHERE project_id=? ORDER BY rowid', (project_id,)) if r['id'] not in document.get('hidden_job_ids',[])]
+        document['jobs_order']='oldest_first'
         current_providers={}
         for job in document['jobs']:
+            raw_checkpoint=job.pop('checkpoint')
+            try:details=json.loads(raw_checkpoint) if raw_checkpoint else {}
+            except (ValueError,TypeError):details={}
+            if isinstance(details,dict):
+                job['metrics']=details.get('metrics',{})
+                if details.get('phase') in ('mix','render','validate'):job['phase']=details['phase']
+                if job['kind']=='translate':job['completed_cues']=len(details.get('cues',[]))
             payload=json.loads(job.pop('payload'));job['can_retry']=job['state'] in ('failed','canceled') and job['attempts']<3
             if job['state'] in ('failed','canceled') and job['kind'] in ('transcribe','translate'):
                 old_model=payload.get('provider',{}).get('model','').lower()
@@ -448,6 +460,22 @@ def control(job_id: str, action: Literal['cancel', 'retry']):
             raise HTTPException(409, 'Trạng thái tác vụ đã thay đổi. Hãy làm mới danh sách trước khi thao tác.')
     return {'status': action}
 
+
+@app.delete('/api/jobs/{job_id}')
+def hide_job(job_id:str):
+    # Retain checkpoints and pipeline references; this removes history from the UI.
+    with store.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        row=db.execute('SELECT project_id,state FROM jobs WHERE id=?',(job_id,)).fetchone()
+        if not row:raise KeyError(job_id)
+        doc=store.project(db,row['project_id'])
+        if row['state'] not in ('succeeded','failed','canceled'):raise HTTPException(409,'Hủy tác vụ và chờ dừng trước khi xóa khỏi lịch sử.')
+        hidden=doc.setdefault('hidden_job_ids',[])
+        if job_id not in hidden:
+            hidden.append(job_id)
+            # Visibility metadata must not invalidate an in-flight subtitle autosave.
+            db.execute('UPDATE projects SET document=? WHERE id=?',(json.dumps(doc,ensure_ascii=False),doc['id']))
+    return {'status':'removed_from_history','outputs_preserved':True}
 
 @app.get('/api/projects/{project_id}/artifacts/{artifact_id}')
 def artifact(project_id:str,artifact_id:str):

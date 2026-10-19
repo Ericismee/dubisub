@@ -37,6 +37,8 @@ class Translate(BaseModel):
     scene_analysis_id:str|None=None
     context_note:str=Field(default='',max_length=1200)
     batch_size:int=Field(default=20,ge=1,le=20)
+    quality:Literal['fast','balanced','careful']='balanced'
+    concurrency:int=Field(default=1,ge=1,le=2)
 
     @field_validator('target_languages')
     @classmethod
@@ -55,6 +57,33 @@ class Transcribe(BaseModel):
     @field_validator('source_language')
     @classmethod
     def source(cls,value):return value if value=='auto' else tag(value)
+
+
+@router.get('/jobs/{jid}/translation-progress')
+def translation_progress(jid:str):
+    with store.connect() as db:row=db.execute("SELECT state,checkpoint FROM jobs WHERE id=? AND kind='translate'",(jid,)).fetchone()
+    if not row:raise KeyError(jid)
+    saved=json.loads(row['checkpoint']) if row['checkpoint'] else {}
+    return {'state':row['state'],'cues':saved.get('cues',[]),'metrics':saved.get('metrics',{})}
+
+
+class PartialTrack(BaseModel):
+    revision:int
+
+
+@router.post('/jobs/{jid}/partial-track',status_code=201)
+def partial_track(jid:str,body:PartialTrack):
+    from .ai_tasks import fingerprint
+    with store.connect() as db:
+        db.execute('BEGIN IMMEDIATE');job=db.execute("SELECT * FROM jobs WHERE id=? AND kind='translate'",(jid,)).fetchone()
+        if not job:raise KeyError(jid)
+        if job['state']=='succeeded':raise HTTPException(409,'Lượt dịch đã xong. Chọn bản dịch hoàn chỉnh trong danh sách phụ đề.')
+        doc=store.project(db,job['project_id'])
+        if doc['revision']!=body.revision:raise HTTPException(409,'Dự án đã đổi; tải lại trước khi mở nháp.')
+        saved=json.loads(job['checkpoint']) if job['checkpoint'] else {};payload=json.loads(job['payload']);cues=saved.get('cues',[])
+        if not cues:raise HTTPException(422,'Chưa có batch dịch hợp lệ để sửa.')
+        tid=store.uid();doc['tracks'].append({'id':tid,'asset_id':job['asset_id'],'origin_job_id':jid,'name':f'Nháp dịch đang làm · {len(cues)}/{len(payload["source"]["cues"])} câu','kind':'translation','partial':True,'reviewed':False,'language':payload['target_language'],'cues':cues,'source_track_id':payload['source']['id'],'source_hash':fingerprint(payload['source']['cues']),'glossary':payload.get('glossary',{})});store.save(db,doc)
+    return {'project_id':job['project_id'],'track_id':tid}
 
 
 class Glossary(BaseModel):
@@ -131,7 +160,11 @@ def render_plan(project_id:str,body:Render):
     if not any(s.get('codec_type')=='video' for s in metadata.get('streams',[])):raise HTTPException(422,'Chọn nguồn có video đã được kiểm tra.')
     duration=round(float(metadata.get('format',{}).get('duration',0))*1000)
     if duration<=0:raise HTTPException(422,'Chưa xác định được thời lượng video.')
-    plan=normalize_plan(body.plan,duration)
+    from .subtitle_masks import attach
+    raw={**body.plan,'subtitle_mask':attach(doc,body.asset_id,body.plan.get('subtitle_mask',{}),duration)} if body.plan.get('subtitle_mask',{}).get('track_id') else body.plan
+    plan=normalize_plan(raw,duration)
+    video=next(s for s in metadata['streams'] if s.get('codec_type')=='video')
+    plan.update(source_width=video['width'],source_height=video['height'])
     return {'plan':plan}
 
 
@@ -189,6 +222,7 @@ def save_glossary(project_id:str,body:Glossary):
 def translate(project_id:str,body:Translate):
     try:provider=configured('translation')
     except ProviderError as exc:raise HTTPException(409,str(exc)) from None
+    if provider.get('protocol')=='ollama' and body.concurrency>1:raise HTTPException(422,'Ollama local hiện chạy một batch để tránh tranh RAM/VRAM. Provider từ xa có thể chọn 2 batch.')
     jobs=[]
     with store.connect() as db:
         db.execute('BEGIN IMMEDIATE');doc=store.project(db,project_id)
@@ -207,7 +241,7 @@ def translate(project_id:str,body:Translate):
             if existing:raise HTTPException(409,'Đang có tác vụ dịch cùng track và ngôn ngữ.')
             jid=store.uid();payload={'source':source,'target_language':language,'provider':provider,'glossary':doc.get('glossary',{})}
             if body.cue_ids is not None:payload['cue_ids']=body.cue_ids
-            payload.update(scenes=scenes,context_note=body.context_note,batch_size=body.batch_size)
+            payload.update(scenes=scenes,context_note=body.context_note,batch_size=body.batch_size,quality=body.quality,concurrency=body.concurrency)
             db.execute("INSERT INTO jobs(id,project_id,asset_id,kind,payload) VALUES(?,?,?,'translate',?)",(jid,project_id,source['asset_id'],json.dumps(payload)))
             jobs.append({'id':jid,'language':language})
     return {'jobs':jobs}

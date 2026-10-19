@@ -181,3 +181,25 @@ def test_project_library_pagination_search_and_deleted(client):
     assert set(ids).issubset(found) and deleted['id'] not in found
     assert client.get('/api/project-library',params={'search':'điện ảnh'}).json()['items'][0]['id']==special['id']
     assert client.get('/api/project-library?offset=-1').status_code==422
+
+
+def test_job_history_preserves_order_and_dependencies(client):
+    pid=create(client)
+    with store.connect() as db:
+        aid=store.uid()
+        db.execute("INSERT INTO assets(id,project_id,filename,path,kind,checksum) VALUES(?,?,?,?,?,?)",(aid,pid,'fixture','fixture','generated','fixture'))
+        ids=[store.uid() for _ in range(3)]
+        for jid,state in zip(ids,('succeeded','failed','running')):
+            db.execute('INSERT INTO jobs(id,project_id,asset_id,kind,state,checkpoint) VALUES(?,?,?,?,?,?)',(jid,pid,aid,'translate',state,'{}'))
+    jobs=client.get('/api/projects/'+pid).json()['jobs']
+    assert [j['id'] for j in jobs]==ids
+    assert client.delete('/api/jobs/'+ids[2]).status_code==409
+    revision=client.get('/api/projects/'+pid).json()['revision']
+    assert client.delete('/api/jobs/'+ids[0]).json()['outputs_preserved']
+    assert client.get('/api/projects/'+pid).json()['revision']==revision
+    assert client.delete('/api/jobs/'+ids[0]).status_code==200
+    assert ids[0] not in [j['id'] for j in client.get('/api/projects/'+pid).json()['jobs']]
+    with store.connect() as db:
+        assert db.execute('SELECT checkpoint FROM jobs WHERE id=?',(ids[0],)).fetchone()[0]=='{}'
+    assert client.post('/api/jobs/'+ids[2]+'/cancel').status_code==200
+    assert client.delete('/api/jobs/'+ids[2]).status_code==200
