@@ -36,6 +36,7 @@ class Translate(BaseModel):
     cue_ids: list[str] | None = Field(default=None,min_length=1,max_length=5000)
     scene_analysis_id:str|None=None
     context_note:str=Field(default='',max_length=1200)
+    batch_size:int=Field(default=20,ge=1,le=20)
 
     @field_validator('target_languages')
     @classmethod
@@ -48,6 +49,7 @@ class Translate(BaseModel):
 class Transcribe(BaseModel):
     asset_id: str
     source_language: str='auto'
+    word_timestamps:bool|None=None
     audio_stream: int=Field(default=0,ge=0,le=32)
 
     @field_validator('source_language')
@@ -145,7 +147,9 @@ def render(project_id:str,body:Render):
         if body.burn_subtitles and track.get('kind') in ('translation','asr') and not track.get('reviewed'):
             raise HTTPException(422,'Hãy duyệt track ASR/bản dịch trước khi gắn vào video.')
         if body.burn_subtitles and track.get('kind')=='translation':
-            from .ai_tasks import fingerprint,context_current
+            from .ai_tasks import validate_target_text
+            validate_target_text(track['cues'],track['language'],track.get('glossary',{}))
+            from .ai_tasks import fingerprint,context_current,validate_target_text
             source=next((t for t in doc['tracks'] if t['id']==track.get('source_track_id')),None)
             if not source or fingerprint(source['cues'])!=track.get('source_hash') or not context_current(doc,track):
                 raise HTTPException(422,'Phụ đề nguồn đã thay đổi; dịch và duyệt lại trước khi xuất.')
@@ -203,7 +207,7 @@ def translate(project_id:str,body:Translate):
             if existing:raise HTTPException(409,'Đang có tác vụ dịch cùng track và ngôn ngữ.')
             jid=store.uid();payload={'source':source,'target_language':language,'provider':provider,'glossary':doc.get('glossary',{})}
             if body.cue_ids is not None:payload['cue_ids']=body.cue_ids
-            payload.update(scenes=scenes,context_note=body.context_note)
+            payload.update(scenes=scenes,context_note=body.context_note,batch_size=body.batch_size)
             db.execute("INSERT INTO jobs(id,project_id,asset_id,kind,payload) VALUES(?,?,?,'translate',?)",(jid,project_id,source['asset_id'],json.dumps(payload)))
             jobs.append({'id':jid,'language':language})
     return {'jobs':jobs}
@@ -213,6 +217,7 @@ def translate(project_id:str,body:Translate):
 def transcribe(project_id:str,body:Transcribe):
     try:provider=configured('asr')
     except ProviderError as exc:raise HTTPException(409,str(exc)) from None
+    if body.word_timestamps and provider.get('protocol')!='faster_whisper':raise HTTPException(422,'Căn theo mốc từ hiện hỗ trợ faster-whisper local. Không suy đoán capability của API khác.')
     with store.connect() as db:
         db.execute('BEGIN IMMEDIATE');store.project(db,project_id)
         asset=db.execute("SELECT * FROM assets WHERE id=? AND project_id=? AND kind='media'",(body.asset_id,project_id)).fetchone()
@@ -222,7 +227,7 @@ def transcribe(project_id:str,body:Transcribe):
         if db.execute("SELECT id FROM jobs WHERE asset_id=? AND kind='transcribe' AND state IN ('queued','running')",(body.asset_id,)).fetchone():raise HTTPException(409,'Media đang được nhận dạng.')
         metadata=json.loads(asset['metadata'])
         source_offset=max(0,round((float(streams[body.audio_stream].get('start_time',0))-float(metadata.get('format',{}).get('start_time',0)))*1000))
-        jid=store.uid();payload={**body.model_dump(),'provider':provider,'source_offset_ms':source_offset}
+        jid=store.uid();payload={**body.model_dump(),'provider':provider,'source_offset_ms':source_offset,'word_timestamps':body.word_timestamps if body.word_timestamps is not None else provider.get('protocol')=='faster_whisper'}
         db.execute("INSERT INTO jobs(id,project_id,asset_id,kind,payload) VALUES(?,?,?,'transcribe',?)",(jid,project_id,body.asset_id,json.dumps(payload)))
     return {'job_id':jid}
 
@@ -234,8 +239,11 @@ def review_track(project_id:str,track_id:str,body:Review):
         if doc['revision']!=body.revision:raise HTTPException(409,'Track đã thay đổi. Mở lại trước khi duyệt.')
         track=next((t for t in doc['tracks'] if t['id']==track_id),None)
         if not track:raise KeyError(track_id)
+        if body.reviewed and track.get('kind')=='translation':
+            from .ai_tasks import validate_target_text
+            validate_target_text(track['cues'],track['language'],track.get('glossary',{}))
         if body.reviewed and track.get('source_track_id'):
-            from .ai_tasks import fingerprint,context_current
+            from .ai_tasks import fingerprint,context_current,validate_target_text
             source=next((t for t in doc['tracks'] if t['id']==track['source_track_id']),None)
             if not source or fingerprint(source['cues'])!=track.get('source_hash') or not context_current(doc,track):
                 raise HTTPException(409,'Nguồn đã thay đổi; cần dịch lại trước khi duyệt.')

@@ -100,3 +100,30 @@ def test_provider_roles_and_default_vieneu(tmp_path,monkeypatch):
         assert r.status_code==409 and 'VieNeu chỉ dùng' in r.json()['detail']
         c.put('/api/settings',json={'providers':[{'kind':'asr','endpoint':'http://127.0.0.1:11434/v1','model':'nomic-embed-text:latest'}]})
         with pytest.raises(ProviderError,match='embedding'):configured('asr')
+
+
+def test_fitted_dubbing_burns_measured_subtitles_and_preserves_source(provider,monkeypatch):
+    import hashlib
+    from backend.subtitles import parse
+    client,state,directory=provider
+    video=directory/'fit-source.mp4'
+    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','testsrc2=size=320x180:duration=3','-c:v','libx264','-y',str(video)],check=True)
+    checksum=hashlib.sha256(video.read_bytes()).hexdigest()
+    pid=client.post('/api/projects',json={'name':'fitted dubbing'}).json()['id']
+    with video.open('rb') as f:client.post(f'/api/projects/{pid}/upload',data={'kind':'media'},files={'file':('fit-source.mp4',f)})
+    worker.run_once()
+    sub='1\n00:00:00,100 --> 00:00:00,300\nFirst speech\n\n2\n00:00:00,500 --> 00:00:00,900\nSecond speech\n'
+    client.post(f'/api/projects/{pid}/upload',data={'kind':'subtitle'},files={'file':('fit.srt',sub.encode())})
+    p=client.get('/api/projects/'+pid).json();track=p['tracks'][0];aid=next(a['id'] for a in p['assets'] if a['kind']=='media')
+    monkeypatch.setattr(dubbing,'capability',lambda provider:{'cloning':True})
+    body={'revision':p['revision'],'track_id':track['id'],'voice':{'kind':'preset','id':'fixture-vi'},'transfer_confirmed':True,'provider_fingerprint':dubbing.fingerprint(configured('tts')),'asset_id':aid,'export_video':True,'fit_timing':True,'burn_subtitles':True}
+    r=client.post(f'/api/projects/{pid}/narrations',json=body);assert r.status_code==202,r.text
+    worker.run_once();p=client.get('/api/projects/'+pid).json();assert p['jobs'][-1]['state']=='succeeded',p['jobs'][-1]
+    d=p['dubbings'][-1];assert d['segments'][0]['speed_factor']>1
+    assert not any(s['overlap'] or s['overflow_ms'] for s in d['segments'])
+    for cue,segment in zip(d['subtitle_cues'],d['segments']):
+        assert cue['start_ms']==segment['start_ms'] and cue['end_ms']==segment['start_ms']+segment['duration_ms']
+    r=client.get(f"/api/projects/{pid}/narrations/{d['id']}/srt");assert r.status_code==200
+    assert len(parse(r.text,'srt'))==2
+    assert client.get(f"/api/projects/{pid}/narrations/{d['id']}/video").status_code==200
+    assert hashlib.sha256(video.read_bytes()).hexdigest()==checksum

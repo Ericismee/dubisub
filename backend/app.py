@@ -233,6 +233,10 @@ def read(project_id: str):
         document = store.project(db, project_id)
         from .ai_tasks import fingerprint
         for track in document['tracks']:
+            if track.get('kind')=='translation':
+                from .ai_tasks import validate_target_text
+                try:validate_target_text(track['cues'],track['language'],track.get('glossary',{}))
+                except ValueError as exc:track['translation_error']=str(exc)
             if track.get('source_track_id'):
                 source=next((t for t in document['tracks'] if t['id']==track['source_track_id']),None)
                 from .ai_tasks import context_current

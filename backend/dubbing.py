@@ -139,6 +139,9 @@ class Narration(BaseModel):
     transfer_confirmed:bool=False
     provider_fingerprint:str=''
     export_video:bool=False
+    fit_timing:bool=False
+    burn_subtitles:bool=False
+    subtitle_mask:dict=Field(default_factory=dict)
     asset_id:str|None=None
 
 @router.post('/projects/{pid}/narrations',status_code=202)
@@ -158,6 +161,7 @@ def narration(pid:str,body:Narration):
         if body.track_id and not track:raise HTTPException(422,'Không tìm thấy track.')
         review=None
         if body.analysis_id:
+            if body.fit_timing or body.burn_subtitles:raise HTTPException(422,'Căn theo video nguồn chỉ dùng cho track dịch; review có timeline riêng.')
             review=doc.get('analyses',{}).get(body.analysis_id)
             if not review or review['kind'] not in ('review','summary','describe') or not review['reviewed']:raise HTTPException(422,'Chọn kịch bản đã duyệt trước khi tạo lời dẫn.')
             if review.get('language','und').split('-')[0]!='vi':raise HTTPException(422,'Adapter lời dẫn hiện chỉ bật tiếng Việt.')
@@ -167,6 +171,9 @@ def narration(pid:str,body:Narration):
             # Input contains source evidence, never invented output timestamps.
             cues=[{'id':r['id'],'text':r['text'],'start_ms':min(t['start_ms'] for t in r['source_ranges']),'end_ms':max(t['end_ms'] for t in r['source_ranges']),'source_ranges':r['source_ranges']} for r in review['items']]
         elif track:
+            if track.get('kind')=='translation':
+                from .ai_tasks import validate_target_text
+                validate_target_text(track['cues'],track['language'],track.get('glossary',{}))
             if track.get('kind')=='review':raise HTTPException(422,'Sửa và đọc lại kịch bản gốc để tạo lại timeline review; không dùng lại timing review như nguồn.')
             if track['language']!='und' and track['language'].split('-')[0].lower()!='vi':raise HTTPException(422,'Adapter đã xác minh hiện chỉ bật tiếng Việt (vi).')
             if track.get('kind') in ('translation','asr') and not track.get('reviewed'):raise HTTPException(422,'Duyệt nội dung ASR/bản dịch trước khi tạo giọng.')
@@ -190,6 +197,9 @@ def narration(pid:str,body:Narration):
             if not any(s.get('codec_type')=='video' for s in meta.get('streams',[])):raise HTTPException(422,'Chọn nguồn video đã kiểm tra để xuất.')
             source_duration_ms=round(float(meta.get('format',{}).get('duration',0))*1000)
             if not 0<source_duration_ms<=7200000:raise HTTPException(422,'Xuất lồng tiếng hiện nhận video tối đa 2 giờ.')
+            if body.subtitle_mask:
+                from .rendering import normalize_plan
+                normalize_plan({'subtitle_mask':body.subtitle_mask},source_duration_ms)
         else:source_duration_ms=0
         if not aid:
             aid=store.uid();db.execute('INSERT INTO assets VALUES(?,?,?,?,?,?,NULL)',(aid,pid,'Lời đọc','','generated',''))
@@ -203,10 +213,15 @@ def narration(pid:str,body:Narration):
     return {'job_id':jid}
 
 @router.get('/projects/{pid}/narrations/{jid}/{kind}')
-def narration_file(pid:str,jid:str,kind:Literal['audio','video']):
+def narration_file(pid:str,jid:str,kind:Literal['audio','video','srt','vtt','ass']):
     with store.connect() as db:doc=store.project(db,pid)
     artifact=next((d for d in doc.get('dubbings',[]) if d['id']==jid),None)
     if not artifact or kind=='video' and not artifact.get('video'):raise KeyError(jid)
+    if kind in ('srt','vtt','ass'):
+        from fastapi.responses import Response
+        from .subtitles import export
+        cues=artifact.get('subtitle_cues') or [{'id':s['id'],'text':s['text'],'start_ms':s['start_ms'],'end_ms':s['start_ms']+s['duration_ms']} for s in artifact['segments']]
+        return Response(export(cues,kind),media_type='text/plain; charset=utf-8',headers={'Content-Disposition':f'attachment; filename="dubisub-dubbed.{kind}"'})
     ext='wav' if kind=='audio' else 'mp4'
     return FileResponse(store.root()/'dubbings'/f'{jid}.{ext}',media_type='audio/wav' if ext=='wav' else 'video/mp4',filename='dubisub-narration.'+ext)
 
@@ -286,11 +301,30 @@ def execute(job,command):
                 voice_id=voice['id']
             generated=synthesize(job,command,provider,voice_id,cue['text'],directory);active(job);generated.replace(final)
         with wave.open(str(final),'rb') as audio:duration_ms=round(audio.getnframes()/audio.getframerate()*1000)
+        speed_factor=1.;slot_end=cue['end_ms']
+        if payload.get('fit_timing'):
+            slot_end=payload['cues'][index+1]['start_ms']-80 if index+1<len(payload['cues']) else payload.get('source_duration_ms') or cue['end_ms']
+            available=slot_end-cue['start_ms']
+            if available<=0:raise ProviderError(f'Câu {index+1} có timing chồng nhau. Sửa mốc nguồn trước khi căn giọng.')
+            if duration_ms>available:
+                speed_factor=duration_ms/available*1.02
+                if speed_factor>2:raise ProviderError(f'Câu {index+1} không đủ khoảng trống ngay cả ở tốc độ 2x. Tách/sửa câu; không cắt mất lời hoặc chồng tiếng.')
+                fit_key=fingerprint({'raw_cache_key':key,'available_ms':available,'alignment_version':1})
+                fitted=cache/f'{fit_key}.wav'
+                if not fitted.exists():
+                    temp=directory/f'fit-{index}.wav'
+                    command([os.getenv('DUBISUB_FFMPEG','ffmpeg'),'-v','error','-nostdin','-i',str(final),'-af',f'atempo={speed_factor}','-ac','1','-ar','48000','-c:a','pcm_s16le','-y',str(temp)],job)
+                    active(job);temp.replace(fitted)
+                final=fitted;key=fit_key
+                with wave.open(str(final),'rb') as audio:duration_ms=round(audio.getnframes()/audio.getframerate()*1000)
+                if duration_ms>available+40:raise ProviderError('Không căn được độ dài giọng trong khoảng trống; cần sửa câu.')
         item={**cue,'cache_key':key,'duration_ms':duration_ms,'overflow_ms':max(0,duration_ms-(cue['end_ms']-cue['start_ms'])),'speaker':speaker or 'default','voice':voice,'profile_id':profile_id,'overlap':False}
         if payload.get('analysis_id'):
             output_start=segments[-1]['output_end_ms'] if segments else 0
             item.update(start_ms=output_start,end_ms=output_start+duration_ms,output_end_ms=output_start+math.ceil(duration_ms/40)*40,overflow_ms=0)
         segments.append(item)
+        item.update(speed_factor=speed_factor,slot_end_ms=slot_end)
+        if payload.get('fit_timing'):item['overflow_ms']=max(0,cue['start_ms']+duration_ms-slot_end)
         try:
             with store.connect() as db:
                 db.execute('BEGIN IMMEDIATE');active(job);doc=store.project(db,job['project_id']);doc.setdefault('dubbing_cache',{})[key]={'profile_id':profile_id};store.save(db,doc)
@@ -300,6 +334,7 @@ def execute(job,command):
     for i,s in enumerate(segments):
         s['overlap']=any(i!=j and s['start_ms']<t['start_ms']+t['duration_ms'] and t['start_ms']<s['start_ms']+s['duration_ms'] for j,t in enumerate(segments))
     output=directory/'narration.wav';mix(segments,output,job)
+    subtitle_cues=[{'id':s['id'],'text':s['text'],'start_ms':s['start_ms'],'end_ms':s['start_ms']+s['duration_ms']} for s in segments]
     video=directory/'narration.mp4'
     if payload['export_video'] and payload.get('analysis_id'):
         from .review_render import render
@@ -307,7 +342,13 @@ def execute(job,command):
     elif payload['export_video']:
         video_cap=min(int(os.getenv('DUBISUB_MAX_UPLOAD_MB','2048'))*1024**2,shutil.disk_usage(directory).free-128*1024**2)
         if video_cap<=0:raise ProviderError('Không đủ đĩa để xuất MP4.')
-        command([os.getenv('DUBISUB_FFMPEG','ffmpeg'),'-v','error','-nostdin','-protocol_whitelist','file,pipe','-format_whitelist','mov,matroska,webm,avi,mp3,wav,flac,ogg,mpegts,mpeg,aac','-i',job['path'],'-i',str(output),'-map','0:v:0','-map','1:a:0','-c:v','libx264','-preset','veryfast','-threads','2','-c:a','aac','-movflags','+faststart','-fs',str(video_cap),'-y',str(video)],job,timeout=10800)
+        from .rendering import normalize_plan,video_filter_args
+        raw_plan={'fps':30}
+        if payload.get('subtitle_mask'):raw_plan['subtitle_mask']=payload['subtitle_mask']
+        plan=normalize_plan(raw_plan,payload['source_duration_ms'])
+        video_args=video_filter_args(plan,subtitle_cues,directory,payload.get('burn_subtitles',False))
+        expected=max(payload.get('source_duration_ms',0),max(s['start_ms']+s['duration_ms'] for s in segments))
+        command([os.getenv('DUBISUB_FFMPEG','ffmpeg'),'-v','error','-nostdin','-protocol_whitelist','file,pipe','-format_whitelist','mov,matroska,webm,avi,mp3,wav,flac,ogg,mpegts,mpeg,aac','-i',job['path'],'-i',str(output),*video_args,'-map','1:a:0','-af',f'apad=whole_dur={expected/1000}','-c:v','libx264','-preset','veryfast','-threads','2','-pix_fmt','yuv420p','-c:a','aac','-movflags','+faststart','-fs',str(video_cap),'-y',str(video)],job,timeout=10800,cwd=directory)
         probe=json.loads(command([os.getenv('DUBISUB_FFPROBE','ffprobe'),'-v','error','-show_format','-of','json',str(video)],job))
         expected=max(payload.get('source_duration_ms',0),max(s['start_ms']+s['duration_ms'] for s in segments))
         if abs(float(probe.get('format',{}).get('duration',0))*1000-expected)>200:raise ProviderError('Video xuất thiếu thời lượng hoặc chạm giới hạn file; không lưu bản chưa hoàn tất.')
@@ -320,7 +361,7 @@ def execute(job,command):
             for ext,path in [('wav',output),('mp4',video)]:
                 if path.exists():
                     target=destination/f"{job['id']}.{ext}";path.replace(target);moved.append(target)
-            item={'id':job['id'],'track_id':payload['track_id'],'source_revision':payload['source_revision'],'segments':segments,'profile_ids':list(payload['profiles']),'video':payload['export_video'],'created_at':time.time()}
+            item={'id':job['id'],'track_id':payload['track_id'],'source_revision':payload['source_revision'],'segments':segments,'subtitle_cues':subtitle_cues,'fit_timing':payload.get('fit_timing',False),'burn_subtitles':payload.get('burn_subtitles',False),'profile_ids':list(payload['profiles']),'video':payload['export_video'],'created_at':time.time()}
             if payload.get('analysis_id'):
                 tid=store.uid();item.update(track_id=tid,analysis_id=payload['analysis_id'])
                 doc['tracks'].append({'id':tid,'asset_id':job['asset_id'],'kind':'review','language':payload['language'],'reviewed':True,'analysis_id':payload['analysis_id'],'job_id':job['id'],'cues':[{'id':s['id'],'text':s['text'],'start_ms':s['start_ms'],'end_ms':s['end_ms']} for s in segments]})

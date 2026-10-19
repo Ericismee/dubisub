@@ -16,6 +16,7 @@ def test_review_measured_output_timeline_cache_and_video(provider,monkeypatch):
     with media.open('rb') as f:client.post(f'/api/projects/{pid}/upload',data={'kind':'media'},files={'file':('source.mp4',f)})
     worker.run_once();p=client.get('/api/projects/'+pid).json();aid=p['assets'][0]['id']
     script={'id':'script','kind':'review','language':'vi','reviewed':True,'items':[{'id':str(i),'text':'Fixture narration '+str(i),'source_ranges':[{'start_ms':5000+i*1000,'end_ms':6000+i*1000,'type':'image'}]} for i in range(2)]}
+    script['items'][0]['source_ranges'].append({'start_ms':1000,'end_ms':2000,'type':'image'})
     with store.connect() as db:
         doc=store.project(db,pid);doc['analyses']={'script':script};store.save(db,doc);revision=doc['revision']
     body={'revision':revision,'analysis_id':'script','voice':{'kind':'preset','id':'fixture-vi'},'transfer_confirmed':True,'provider_fingerprint':dubbing.fingerprint(configured('tts')),'asset_id':aid,'export_video':True}
@@ -25,6 +26,8 @@ def test_review_measured_output_timeline_cache_and_video(provider,monkeypatch):
     result=p['dubbings'][-1];assert result['analysis_id']=='script'
     assert [(s['start_ms'],s['end_ms']) for s in result['segments']]==[(0,500),(520,1020)]
     assert result['segments'][0]['source_ranges'][0]['start_ms']==5000
+    assert [r['start_ms'] for r in result['segments'][0]['render_source_ranges']]==[1000,5000]
+    assert sum(r['output_duration_ms'] for r in result['segments'][0]['render_source_ranges'])==520
     assert not any(s['overlap'] or s['overflow_ms'] for s in result['segments'])
     track=next(t for t in p['tracks'] if t['kind']=='review');assert track['cues'][1]['start_ms']==520
     video=client.get(f'/api/projects/{pid}/narrations/{r.json()["job_id"]}/video');assert video.status_code==200
