@@ -8,6 +8,7 @@ import tempfile
 import time
 import threading
 import json
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import urlopen
@@ -47,7 +48,6 @@ def main():
                 data=json.dumps(value).encode();self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
             def do_POST(self):
                 if self.path=='/v1/voices':
-                    import re
                     raw=self.rfile.read(int(self.headers['Content-Length']));name=re.search(b'name="name"\r\n\r\n([^\r]+)',raw).group(1).decode();self.json_response({'id':name});return
                 if self.path=='/v1/audio/speech':
                     import wave,io
@@ -67,7 +67,7 @@ def main():
                 payload=json.loads(content)
                 if 'evidence' in payload:
                     self.json_response({'choices':[{'message':{'content':json.dumps({'items':[{'text':'Fixture review narration','evidence_ids':list(payload['evidence'])[:1]}]})}}]});return
-                answer={'cues':[{'id':c['id'],'text':'fixture-'+payload['target_language']+': '+c['text']} for c in payload['cues']]}
+                answer={'cues':[{'id':c['id'],'text':'fixture-'+payload['target_language']+': '+(re.sub('[\u3400-\u9fff]','',c['text']) if payload['target_language'].startswith('vi') else c['text'])} for c in payload['cues']]}
                 self.json_response({'choices':[{'message':{'content':json.dumps(answer)}}]})
             def serve(self,body):
                 if self.path not in ('/fixture.mp4','/fixture.srt'):
@@ -158,7 +158,7 @@ def main():
                 page.get_by_label('Nhập video hoặc audio',exact=True).set_input_files(sample)
                 expect(page.get_by_text('succeeded',exact=False)).to_be_visible(timeout=20000)
                 page.wait_for_function('document.querySelector("video")?.readyState >= 1')
-                assert page.locator('video').evaluate('(v)=>v.duration') == 3
+                assert page.locator('main.stage video').evaluate('(v)=>v.duration') == 3
                 page.get_by_label('Nhập phụ đề',exact=True).set_input_files(sub)
                 cue=page.get_by_label('Câu 1',exact=True)
                 expect(cue).to_have_value('Xin chào Việt Nam!',timeout=15000)
@@ -171,7 +171,7 @@ def main():
                 expect(cue).to_have_value('Chào DubiSub — tiếng Việt 世界')
                 expect(page.get_by_role('status')).to_have_text('Đã tự lưu',timeout=10000)
                 page.get_by_role('button',name='Tới câu 2',exact=True).click()
-                assert abs(page.locator('video').evaluate('(v)=>v.currentTime')-1.3)<.05
+                assert abs(page.locator('main.stage video').evaluate('(v)=>v.currentTime')-1.3)<.05
                 # Reopening must round-trip through SQLite, not component state.
                 page.reload();page.wait_for_load_state('networkidle')
                 page.locator('.project-open').filter(has_text='Bản dịch thử nghiệm').click()
@@ -181,7 +181,7 @@ def main():
                 page.get_by_role('slider',name='Thu phóng timeline',exact=True).fill('2')
                 assert page.locator('.timeline-content').evaluate('(e)=>e.style.width') == '200%'
                 page.get_by_role('slider',name='Vị trí phát',exact=True).fill('2')
-                assert abs(page.locator('video').evaluate('(v)=>v.currentTime')-2)<.05
+                assert abs(page.locator('main.stage video').evaluate('(v)=>v.currentTime')-2)<.05
                 page.get_by_role('button',name='Phát video',exact=True).click()
                 expect(page.get_by_role('button',name='Tạm dừng',exact=True)).to_be_visible()
                 page.get_by_role('button',name='Tạm dừng',exact=True).click()
@@ -290,7 +290,9 @@ def main():
                 panel.get_by_text('Nhân vật & đọc track phụ đề',exact=True).click()
                 panel.get_by_role('button',name='Tạo lại riêng câu',exact=True).first.click()
                 expect(panel.locator('.narration-result')).to_have_count(3,timeout=20000)
-                assert panel.locator('.narration-warning').count()>0
+                assert panel.locator('.narration-warning').count()==0
+                expect(panel.get_by_role('button',name='Tạo video có giọng & phụ đề',exact=True)).to_be_visible()
+                expect(panel.get_by_text('Phụ đề theo giọng · SRT',exact=True).first).to_be_visible()
                 page.screenshot(path='test-results/studio-clone-fixture.png',full_page=True)
                 page.once('dialog',lambda dialog:dialog.accept())
                 panel.get_by_role('button',name='Xóa hồ sơ & dữ liệu mẫu',exact=True).click()
@@ -340,7 +342,7 @@ def main():
                 review_track=page.locator('.track-select option').filter(has_text='Lời dẫn review').get_attribute('value')
                 page.get_by_label('Track phụ đề',exact=True).select_option(review_track)
                 expect(page.get_by_role('region',name='Timeline review',exact=True)).to_be_visible()
-                assert '/narrations/' in page.locator('video').get_attribute('src')
+                assert '/narrations/' in page.locator('main.stage video').get_attribute('src')
                 page.get_by_label('Track phụ đề',exact=True).select_option(first)
                 page.get_by_role('navigation',name='Công cụ studio').get_by_role('button',name='Phụ đề',exact=True).click()
 
@@ -360,7 +362,7 @@ def main():
                 expect(page.get_by_label('Track phụ đề',exact=True).locator('option:checked')).to_contain_text('· Tiếng Việt ·')
                 expect(page.locator('.subtitle-mask-preview')).to_be_visible()
                 page.get_by_label('Hiện phụ đề',exact=True).uncheck()
-                assert page.locator('video').evaluate('(v)=>v.textTracks[0].mode')=='hidden'
+                assert page.locator('main.stage video').evaluate('(v)=>v.textTracks[0].mode')=='hidden'
                 expect(page.locator('.subtitle-overlay')).to_be_hidden()
                 page.get_by_label('Hiện phụ đề',exact=True).check()
                 page.get_by_label('Track phụ đề',exact=True).select_option(first)

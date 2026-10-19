@@ -224,3 +224,9 @@ dialog{color:var(--ink);background:var(--surface);border:1px solid var(--line);b
 @media(max-width:650px){.library-panel{padding:14px}.project-menu>summary{width:34px;min-height:38px}.project-menu-items button{min-height:38px}.library-panel .asset-list{max-height:190px}}
 
 .library-panel .project-list{max-height:none;overflow:visible}.library-panel .project-row:has(.project-menu[open]){z-index:31}
+
+.narration-result{max-height:420px;overflow:auto;scrollbar-width:thin}.dubbing-panel>.mask-controls>.primary{width:100%;margin-top:12px}
+
+.narration-result video{display:block;width:100%;max-height:220px;background:#000;border-radius:8px;margin:10px 0}
+
+.review-cut-list{display:block;margin-top:6px}.review-cut-list button{font-size:11px;padding:4px 6px;margin:3px}

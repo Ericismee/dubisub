@@ -1,4 +1,5 @@
 """Controlled protocol fixtures, NOT live AI quality verification."""
+import re
 import json
 import threading
 import subprocess
@@ -48,7 +49,9 @@ def provider(tmp_path,monkeypatch):
                 self.respond({'choices':[{'message':{'content':json.dumps(value)}}]});return
             if state['fail_batch'] and len(data['cues'])<20:
                 state['fail_batch']=False;self.respond({'error':'fixture'},500);return
-            cues=[{'id':c['id'],'text':f'fixture-{data["target_language"]}: '+c['text']} for c in data['cues']]
+            cues=[{'id':c['id'],'text':f'fixture-{data["target_language"]}: '+(re.sub('[\u3400-\u9fff]','',c['text']) if data['target_language'].startswith('vi') else c['text'])} for c in data['cues']]
+            if state.get('han_once'):
+                state['han_once']=False;cues[0]['text']='chưa dịch 房子'
             if state['bad_ids'] or state.get('bad_language')==data['target_language']:cues[0]['id']='wrong'
             if self.path=='/api/chat':
                 assert body['stream'] is False and body['format']=='json'
@@ -219,6 +222,26 @@ def test_wrong_asr_model_blocked_before_network():
     from backend.providers import request,ProviderError
     with pytest.raises(ProviderError,match='faster-whisper'):
         request({'endpoint':'http://127.0.0.1:1','model':'nomic-embed-text:latest'},'audio/transcriptions',files={})
+
+
+def test_untranslated_han_repaired_without_changing_ids_or_context(provider):
+    client,state,_=provider;p=source(client);original=p['tracks'][0]
+    state['han_once']=True
+    r=client.post(f"/api/projects/{p['id']}/translate",json={'revision':p['revision'],'track_id':original['id'],'target_languages':['vi'],'context_note':'Known relationship, not extra dialogue.'})
+    assert r.status_code==202
+    worker.run_once();result=client.get('/api/projects/'+p['id']).json()
+    assert result['jobs'][-1]['state']=='succeeded',result['jobs'][-1]
+    translated=result['tracks'][-1]
+    assert [(c['id'],c['start_ms'],c['end_ms']) for c in translated['cues']]==[(c['id'],c['start_ms'],c['end_ms']) for c in original['cues']]
+    assert len(state['requests'])==3
+    assert all(r['context_note']=='Known relationship, not extra dialogue.' for r in state['requests'])
+
+
+def test_han_validation_only_allows_explicit_glossary_values():
+    from backend.ai_tasks import validate_target_text
+    from backend.providers import ProviderError
+    with pytest.raises(ProviderError):validate_target_text([{'text':'Ngôi nhà 房子'}],'vi')
+    validate_target_text([{'text':'Tên gốc 静香'}],'vi',{'Shizuka':'静香'})
 
 
 def test_translation_uses_nearby_visual_context_and_short_ids(provider):

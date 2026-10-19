@@ -180,7 +180,7 @@ def tick():
                     aid=plan['asset_id'];payloads=[]
                     if stage=='asr':
                         media=db.execute('SELECT metadata FROM assets WHERE id=?',(aid,)).fetchone();meta=json.loads(media[0]);stream=next(s for s in meta['streams'] if s.get('codec_type')=='audio');offset=max(0,round((float(stream.get('start_time',0))-float(meta.get('format',{}).get('start_time',0)))*1000))
-                        payloads=[('transcribe',{'provider':plan['providers']['asr'],'source_language':p['request']['source_language'],'audio_stream':0,'asset_id':aid,'source_offset_ms':offset})]
+                        payloads=[('transcribe',{'provider':plan['providers']['asr'],'source_language':p['request']['source_language'],'audio_stream':0,'asset_id':aid,'source_offset_ms':offset,'word_timestamps':plan['providers']['asr'].get('protocol')=='faster_whisper'})]
                     elif stage=='translate':
                         source=plan['source'];payloads=[('translate',{'source':source,'scenes':plan.get('scenes'),'context_note':p['request'].get('context_note',''),'target_language':language,'provider':plan['providers']['translation'],'glossary':plan['glossary'],'style':p['request'].get('style','natural'),'condense':p['request'].get('condense',False)}) for language in p['request']['targets'] if language!=source.get('language')]
                         if source.get('language') in p['request']['targets']:p['track_ids']=[source['id']]

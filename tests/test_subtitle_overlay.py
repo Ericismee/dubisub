@@ -80,3 +80,10 @@ def test_local_asr_rejects_changed_model_revision(tmp_path,monkeypatch):
     for f in ('model.bin','config.json','tokenizer.json'):(model/f).write_text('fixture')
     (model/'source.json').write_text(json.dumps({'revision':'new'}))
     with pytest.raises(ProviderError,match='revision'):transcribe(tmp_path/'unused.wav',{**DEFAULT,'model_revision':'old'},'auto',lambda:None)
+
+
+def test_local_word_alignment_does_not_bridge_silence():
+    from types import SimpleNamespace as O
+    from backend.local_asr import aligned_rows
+    segment=O(start=1,end=90,text='hello world',words=[O(start=1,end=2,word='hello'),O(start=89,end=90,word=' world')])
+    assert aligned_rows(segment)==[{'start':1,'end':2,'text':'hello'},{'start':89,'end':90,'text':' world'}]
